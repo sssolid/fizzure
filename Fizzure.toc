@@ -1,0 +1,21 @@
+## Interface: 30300
+## Title: Fizzure - Modular Enhancement System
+## Notes: A comprehensive modular addon system with enhanced class-specific modules for World of Warcraft 3.3.5
+## Author: Fizzure Development Team
+## Version: 3.0
+## SavedVariables: FizzureDB
+## OptionalDeps:
+## DefaultState: enabled
+## LoadOnDemand: 0
+
+# Core System Files (load order is important)
+Common.lua
+UIFramework.lua
+SecureActions.lua
+Fizzure.lua
+
+# Module Files
+modules\Hunter.lua
+
+# Bindings
+Bindings.xml

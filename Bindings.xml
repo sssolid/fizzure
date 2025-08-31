@@ -1,0 +1,31 @@
+<Bindings>
+    <!-- Fizzure Core System Bindings -->
+    <Binding name="FIZZURE_TOGGLE_MAIN" header="FIZZURE">
+        Fizzure:ToggleMainWindow()
+    </Binding>
+
+    <Binding name="FIZZURE_TOGGLE_DEBUG">
+        Fizzure:ToggleDebug()
+    </Binding>
+
+    <!-- Hunter Module Bindings -->
+<!--    <Binding name="FIZZURE_HUNTER_FEED_PET" header="FIZZURE_HUNTER">-->
+<!--        Hunter: Feed Pet with Preferred Food-->
+<!--    </Binding>-->
+
+<!--    <Binding name="FIZZURE_HUNTER_TOGGLE_STATUS">-->
+<!--        Hunter: Toggle Pet Status Window-->
+<!--    </Binding>-->
+
+<!--    <Binding name="FIZZURE_HUNTER_PROFILES">-->
+<!--        Hunter: Open Pet Food Profiles-->
+<!--    </Binding>-->
+
+    <!-- Placeholder for future module bindings -->
+    <!-- Each module can define its own header/category -->
+    <!-- Example for future modules:
+    <Binding name="FIZZURE_MODULENAME_ACTION" category="ADDONS" header="FIZZURE_MODULENAME">
+        Module Action Description
+    </Binding>
+    -->
+</Bindings>
