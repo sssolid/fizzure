@@ -1,12 +1,34 @@
--- UIFramework.lua - Reusable UI Components for Fizzure Modules
--- Provides common UI patterns and helpers
-
+-- UIFramework.lua - Complete GUI system for Fizzure modules
 local UIFramework = {}
 _G.FizzureUI = UIFramework
 
--- Frame creation helpers
+-- Frame pool for performance
+UIFramework.framePool = {}
+UIFramework.activeFrames = {}
+
+-- Base frame creation
+function UIFramework:CreateFrame(frameType, name, parent, template)
+    local frame = CreateFrame(frameType or "Frame", name, parent or UIParent, template)
+
+    -- Add common methods
+    frame.Hide_ = frame.Hide
+    function frame:Hide()
+        self:Hide_()
+        if self.OnHide then self:OnHide() end
+    end
+
+    frame.Show_ = frame.Show
+    function frame:Show()
+        self:Show_()
+        if self.OnShow then self:OnShow() end
+    end
+
+    return frame
+end
+
+-- Window creation with all features
 function UIFramework:CreateWindow(name, title, width, height, parent)
-    local frame = CreateFrame("Frame", name, parent or UIParent)
+    local frame = self:CreateFrame("Frame", name, parent)
     frame:SetSize(width or 400, height or 300)
     frame:SetPoint("CENTER")
     frame:SetBackdrop({
@@ -15,32 +37,77 @@ function UIFramework:CreateWindow(name, title, width, height, parent)
         tile = true, tileSize = 32, edgeSize = 32,
         insets = { left = 11, right = 12, top = 12, bottom = 11 }
     })
-    frame:SetBackdropColor(0, 0, 0, 0.9)
+    frame:SetBackdropColor(0, 0, 0, 0.95)
+    frame:SetToplevel(true)
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        if self.OnPositionChanged then self:OnPositionChanged() end
+    end)
     frame:SetClampedToScreen(true)
     frame:Hide()
+
+    -- Title bar
+    local titleBar = self:CreateFrame("Frame", nil, frame)
+    titleBar:SetHeight(32)
+    titleBar:SetPoint("TOPLEFT", 8, -8)
+    titleBar:SetPoint("TOPRIGHT", -8, -8)
+
+    local titleText = titleBar:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    titleText:SetPoint("CENTER", 0, 0)
+    titleText:SetText(title or "")
+    frame.titleText = titleText
+    frame.titleBar = titleBar
 
     -- Close button
     local closeBtn = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", -5, -5)
+    closeBtn:SetScript("OnClick", function()
+        frame:Hide()
+    end)
+    frame.closeBtn = closeBtn
 
-    -- Title
-    if title then
-        local titleText = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-        titleText:SetPoint("TOP", 0, -20)
-        titleText:SetText(title)
-        frame.titleText = titleText
-    end
+    -- Content area
+    local content = self:CreateFrame("Frame", nil, frame)
+    content:SetPoint("TOPLEFT", 12, -42)
+    content:SetPoint("BOTTOMRIGHT", -12, 12)
+    frame.content = content
 
     return frame
 end
 
+-- Panel creation
+function UIFramework:CreatePanel(parent, width, height, anchor)
+    local panel = self:CreateFrame("Frame", nil, parent)
+    panel:SetSize(width or 200, height or 100)
+
+    if anchor then
+        panel:SetPoint(anchor.point or "TOPLEFT",
+                anchor.relativeFrame or parent,
+                anchor.relativePoint or "TOPLEFT",
+                anchor.x or 0,
+                anchor.y or 0)
+    else
+        panel:SetPoint("TOPLEFT")
+    end
+
+    panel:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    panel:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
+
+    return panel
+end
+
+-- Status frame with proper layering
 function UIFramework:CreateStatusFrame(name, title, width, height)
-    local frame = CreateFrame("Frame", name, UIParent)
+    local frame = self:CreateFrame("Frame", name, UIParent)
     frame:SetSize(width or 200, height or 140)
     frame:SetPoint("TOPLEFT", 20, -100)
     frame:SetBackdrop({
@@ -50,20 +117,17 @@ function UIFramework:CreateStatusFrame(name, title, width, height)
         insets = { left = 4, right = 4, top = 4, bottom = 4 }
     })
     frame:SetBackdropColor(0, 0, 0, 0.9)
+    frame:SetFrameStrata("MEDIUM")
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
     frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:SetClampedToScreen(true)
 
-    -- Title bar
     if title then
-        local titleBar = CreateFrame("Frame", nil, frame)
-        titleBar:SetSize(width or 200, 20)
-        titleBar:SetPoint("TOP", 0, 0)
-
-        local titleText = titleBar:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-        titleText:SetPoint("LEFT", 8, 0)
+        local titleText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        titleText:SetPoint("TOP", 0, -8)
         titleText:SetText(title)
         frame.titleText = titleText
     end
@@ -71,29 +135,93 @@ function UIFramework:CreateStatusFrame(name, title, width, height)
     return frame
 end
 
--- Button helpers
+-- Scroll frame with proper implementation
+function UIFramework:CreateScrollFrame(parent, width, height, scrollBarWidth, name)
+    scrollBarWidth = scrollBarWidth or 20
+    name = name or ((parent:GetName() or "FizzureParent") .. "_Scroll")
+
+    local scrollFrame = CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetSize(width - scrollBarWidth, height)
+    scrollFrame:SetPoint("TOPLEFT")
+
+    local scrollChild = CreateFrame("Frame", name .. "Child", scrollFrame)
+    scrollChild:SetSize(width - scrollBarWidth - 10, 1)
+    scrollFrame:SetScrollChild(scrollChild)
+
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetScript("OnMouseWheel", function(self, delta)
+        local current   = self:GetVerticalScroll()
+        local maxScroll = self:GetVerticalScrollRange()
+        local newScroll = FizzureCommon:Clamp(current - (delta * 30), 0, maxScroll)
+        self:SetVerticalScroll(newScroll)
+    end)
+
+    function scrollFrame:UpdateScrollChildHeight()
+        local h = 0
+        for i = 1, scrollChild:GetNumChildren() do
+            local child = select(i, scrollChild:GetChildren())
+            if child and child:IsShown() then
+                local bottom, childBottom = child:GetBottom(), scrollChild:GetBottom()
+                if bottom and childBottom then
+                    local ch = childBottom - bottom
+                    if ch > h then h = ch end
+                end
+            end
+        end
+        scrollChild:SetHeight(math.max(h + 10, parent:GetHeight()))
+    end
+
+    scrollFrame.content = scrollChild
+    return scrollFrame
+end
+
+-- Button creation with proper styling
 function UIFramework:CreateButton(parent, text, width, height, onClick)
     local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     button:SetSize(width or 80, height or 22)
-    button:SetText(text or "Button")
+    button:SetText(text or "")
 
     if onClick then
         button:SetScript("OnClick", onClick)
     end
 
+    -- Fix text positioning
+    local fontString = button:GetFontString()
+    if fontString then
+        fontString:SetPoint("CENTER", 0, 0)
+    end
+
     return button
 end
 
+-- Checkbox with label
 function UIFramework:CreateCheckBox(parent, text, checked, onChange)
-    local checkBox = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    local container = self:CreateFrame("Frame", nil, parent)
+    container:SetSize(200, 20)
+
+    local checkBox = CreateFrame("CheckButton", nil, container, "UICheckButtonTemplate")
+    checkBox:SetPoint("LEFT")
     checkBox:SetSize(20, 20)
     checkBox:SetChecked(checked or false)
 
-    if text then
-        local label = parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-        label:SetPoint("LEFT", checkBox, "RIGHT", 5, 0)
-        label:SetText(text)
-        checkBox.label = label
+    local label = container:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    label:SetPoint("LEFT", checkBox, "RIGHT", 5, 0)
+    label:SetText(text or "")
+
+    container.checkBox = checkBox
+    container.label = label
+
+    container.SetChecked = function(self, value)
+        self.checkBox:SetChecked(value)
+    end
+
+    container.GetChecked = function(self)
+        return self.checkBox:GetChecked()
+    end
+
+    container.SetText = function(self, text)
+        self.label:SetText(text)
+        self:SetWidth(self.label:GetStringWidth() + 30)
     end
 
     if onChange then
@@ -102,11 +230,13 @@ function UIFramework:CreateCheckBox(parent, text, checked, onChange)
         end)
     end
 
-    return checkBox
+    container:SetWidth(label:GetStringWidth() + 30)
+
+    return container
 end
 
--- Input helpers
-function UIFramework:CreateEditBox(parent, width, height, onEnter)
+-- Edit box with proper background
+function UIFramework:CreateEditBox(parent, width, height, onEnter, onTextChanged)
     local editBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
     editBox:SetSize(width or 100, height or 20)
     editBox:SetAutoFocus(false)
@@ -118,86 +248,183 @@ function UIFramework:CreateEditBox(parent, width, height, onEnter)
         end)
     end
 
+    if onTextChanged then
+        editBox:SetScript("OnTextChanged", onTextChanged)
+    end
+
+    editBox:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+    end)
+
     return editBox
 end
 
--- List helpers
-function UIFramework:CreateScrollList(parent, width, height)
-    local scrollFrame = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetSize(width or 200, height or 150)
-
-    local content = CreateFrame("Frame", nil, scrollFrame)
-    content:SetSize(width or 200, height or 150)
-    scrollFrame:SetScrollChild(content)
-
-    scrollFrame.content = content
-    scrollFrame.items = {}
-
-    -- Helper function to add items
-    function scrollFrame:AddItem(itemFrame)
-        table.insert(self.items, itemFrame)
-        itemFrame:SetParent(self.content)
-        self:UpdateLayout()
-    end
-
-    -- Helper function to clear items
-    function scrollFrame:ClearItems()
-        for _, item in ipairs(self.items) do
-            item:Hide()
-        end
-        self.items = {}
-        self:UpdateLayout()
-    end
-
-    -- Layout manager
-    function scrollFrame:UpdateLayout()
-        local yOffset = 0
-        for i, item in ipairs(self.items) do
-            item:ClearAllPoints()
-            item:SetPoint("TOPLEFT", 0, yOffset)
-            yOffset = yOffset - (item:GetHeight() + 2)
-            item:Show()
-        end
-
-        self.content:SetHeight(math.max(height or 150, -yOffset))
-    end
-
-    return scrollFrame
-end
-
--- Food slot helper specifically for hunter module
-function UIFramework:CreateFoodSlot(parent, index, onRightClick)
-    local slot = CreateFrame("Button", nil, parent)
-    slot:SetSize(40, 40)
+-- Status bar with text overlay
+function UIFramework:CreateStatusBar(parent, width, height, min, max, value)
+    local bar = CreateFrame("StatusBar", nil, parent)
+    bar:SetSize(width or 100, height or 20)
+    bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bar:SetMinMaxValues(min or 0, max or 100)
+    bar:SetValue(value or 0)
 
     -- Background
+    local bg = bar:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bg:SetVertexColor(0.2, 0.2, 0.2, 0.8)
+    bar.bg = bg
+
+    -- Border
+    bar:SetBackdrop({
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 8,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    bar:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+
+    -- Text overlay (raised to be visible)
+    local text = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    text:SetPoint("CENTER", 0, 0)
+    bar.text = text
+
+    function bar:SetText(str)
+        self.text:SetText(str)
+    end
+
+    return bar
+end
+
+-- Dropdown menu
+function UIFramework:CreateDropdown(parent, width, items, onSelect)
+    local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
+    UIDropDownMenu_SetWidth(dropdown, width or 120)
+
+    UIDropDownMenu_Initialize(dropdown, function(self, level)
+        for i, item in ipairs(items) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = item.text or item
+            info.value = item.value or item
+            info.func = function()
+                UIDropDownMenu_SetSelectedValue(dropdown, info.value)
+                if onSelect then
+                    onSelect(info.value)
+                end
+            end
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+
+    return dropdown
+end
+
+-- Slider
+function UIFramework:CreateSlider(parent, name, min, max, value, step, onChange)
+    local slider = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
+    slider:SetMinMaxValues(min or 0, max or 100)
+    slider:SetValue(value or min or 0)
+    slider:SetValueStep(step or 1)
+    slider:SetWidth(200)
+    slider:SetHeight(20)
+
+    if name then
+        _G[slider:GetName() .. "Text"]:SetText(name)
+    end
+
+    _G[slider:GetName() .. "Low"]:SetText(tostring(min or 0))
+    _G[slider:GetName() .. "High"]:SetText(tostring(max or 100))
+
+    if onChange then
+        slider:SetScript("OnValueChanged", onChange)
+    end
+
+    return slider
+end
+
+-- Tab system
+function UIFramework:CreateTabPanel(parent, tabs)
+    local tabPanel = self:CreateFrame("Frame", nil, parent)
+    tabPanel:SetAllPoints()
+
+    tabPanel.tabs = {}
+    tabPanel.contents = {}
+    tabPanel.selectedTab = 1
+
+    local tabHeight = 32
+    local tabWidth = 100
+
+    for i, tabInfo in ipairs(tabs) do
+        -- Tab button
+        local tab = self:CreateButton(tabPanel, tabInfo.name, tabWidth, tabHeight)
+        tab:SetPoint("TOPLEFT", (i - 1) * tabWidth, 0)
+
+        -- Tab content
+        local content = self:CreateFrame("Frame", nil, tabPanel)
+        content:SetPoint("TOPLEFT", 0, -tabHeight - 5)
+        content:SetPoint("BOTTOMRIGHT")
+        content:Hide()
+
+        tab:SetScript("OnClick", function()
+            tabPanel:SelectTab(i)
+        end)
+
+        tabPanel.tabs[i] = tab
+        tabPanel.contents[i] = content
+
+        if tabInfo.onCreate then
+            tabInfo.onCreate(content)
+        end
+    end
+
+    function tabPanel:SelectTab(index)
+        for i, content in ipairs(self.contents) do
+            content:Hide()
+        end
+
+        for i, tab in ipairs(self.tabs) do
+            tab:SetAlpha(0.7)
+        end
+
+        self.contents[index]:Show()
+        self.tabs[index]:SetAlpha(1)
+        self.selectedTab = index
+    end
+
+    tabPanel:SelectTab(1)
+
+    return tabPanel
+end
+
+-- Food slot for hunter module
+function UIFramework:CreateFoodSlot(parent, index, onRightClick, onDrop)
+    local slot = CreateFrame("Button", nil, parent)
+    slot:SetSize(40, 40)
     slot:SetNormalTexture("Interface\\Buttons\\UI-EmptySlot-White")
     slot:SetHighlightTexture("Interface\\Buttons\\UI-Panel-Button-Highlight")
 
     -- Item texture
     local texture = slot:CreateTexture(nil, "ARTWORK")
-    texture:SetSize(32, 32)
+    texture:SetSize(36, 36)
     texture:SetPoint("CENTER")
     slot.texture = texture
+
+    -- Count text
+    local countText = slot:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    countText:SetPoint("BOTTOMRIGHT", -2, 2)
+    slot.countText = countText
 
     -- Click handling
     slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     slot:SetScript("OnClick", function(self, button)
         if button == "RightButton" and onRightClick then
-            onRightClick(index)
+            onRightClick(index, self)
         end
     end)
 
     -- Drag and drop
     slot:RegisterForDrag("LeftButton")
     slot:SetScript("OnReceiveDrag", function(self)
-        local cursorType, itemID, itemLink = GetCursorInfo()
-        if cursorType == "item" and itemLink then
-            local itemName = GetItemInfo(itemLink)
-            if itemName then
-                self:SetItem(itemName, itemLink)
-                ClearCursor()
-            end
+        if onDrop then
+            onDrop(index, self)
         end
     end)
 
@@ -206,13 +433,11 @@ function UIFramework:CreateFoodSlot(parent, index, onRightClick)
         if self.itemLink then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetHyperlink(self.itemLink)
-            GameTooltip:AddLine("Right-click to remove", 0.7, 0.7, 0.7)
             GameTooltip:Show()
         else
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Empty Food Slot")
-            GameTooltip:AddLine("Drag food item here", 0.7, 0.7, 0.7)
-            GameTooltip:AddLine("Right-click to clear", 0.7, 0.7, 0.7)
+            GameTooltip:SetText("Empty Slot")
+            GameTooltip:AddLine("Drag item here or right-click from list", 0.7, 0.7, 0.7)
             GameTooltip:Show()
         end
     end)
@@ -225,100 +450,148 @@ function UIFramework:CreateFoodSlot(parent, index, onRightClick)
     function slot:SetItem(itemName, itemLink)
         self.itemName = itemName
         self.itemLink = itemLink
-        local itemTexture = GetItemIcon(itemName) or GetItemIcon(itemLink)
-        self.texture:SetTexture(itemTexture)
+
+        if itemName then
+            local itemIcon = GetItemIcon(itemName) or GetItemIcon(itemLink)
+            if itemIcon then
+                self.texture:SetTexture(itemIcon)
+                self.texture:Show()
+            end
+
+            local count = FizzureCommon:GetItemCount(itemName)
+            if count > 1 then
+                self.countText:SetText(count)
+            else
+                self.countText:SetText("")
+            end
+        else
+            self:ClearItem()
+        end
     end
 
     function slot:ClearItem()
         self.itemName = nil
         self.itemLink = nil
         self.texture:SetTexture(nil)
+        self.texture:Hide()
+        self.countText:SetText("")
     end
 
     slot.index = index
     return slot
 end
 
--- Notification system helper
-function UIFramework:ShowTooltipNotification(text, duration)
-    UIErrorsFrame:AddMessage(text, 1, 1, 0, 1, duration or 3)
+-- Text label
+function UIFramework:CreateLabel(parent, text, fontSize)
+    local fontString = parent:CreateFontString(nil, "ARTWORK", fontSize or "GameFontNormal")
+    fontString:SetText(text or "")
+    return fontString
 end
 
--- Debug helpers
-function UIFramework:CreateDebugPanel(parent, width, height)
-    local panel = CreateFrame("Frame", nil, parent)
-    panel:SetSize(width or 300, height or 200)
-    panel:SetBackdrop({
+-- Separator line
+function UIFramework:CreateSeparator(parent, width)
+    local line = parent:CreateTexture(nil, "ARTWORK")
+    line:SetSize(width or parent:GetWidth() - 20, 1)
+    line:SetTexture(1, 1, 1, 0.2)
+    return line
+end
+
+-- Notification toast
+function UIFramework:ShowToast(text, duration, type)
+    duration = duration or 3
+
+    local toast = self:CreateFrame("Frame", nil, UIParent)
+    toast:SetSize(300, 60)
+    toast:SetPoint("TOP", 0, -100)
+    toast:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 16, edgeSize = 16,
         insets = { left = 4, right = 4, top = 4, bottom = 4 }
     })
-    panel:SetBackdropColor(0, 0, 0, 0.8)
 
-    local scrollFrame = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetSize(width - 30, height - 10)
-    scrollFrame:SetPoint("CENTER")
-
-    local content = CreateFrame("Frame", nil, scrollFrame)
-    content:SetSize(width - 30, height - 10)
-    scrollFrame:SetScrollChild(content)
-
-    panel.scrollFrame = scrollFrame
-    panel.content = content
-    panel.lines = {}
-
-    function panel:AddLine(text, color)
-        local line = self.content:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-        line:SetPoint("TOPLEFT", 5, -#self.lines * 12)
-        line:SetSize(self.content:GetWidth() - 10, 12)
-        line:SetJustifyH("LEFT")
-        line:SetText(text)
-
-        if color then
-            line:SetTextColor(color.r or 1, color.g or 1, color.b or 1)
-        end
-
-        table.insert(self.lines, line)
-
-        -- Update content height
-        self.content:SetHeight(math.max(self:GetHeight() - 10, #self.lines * 12))
-
-        -- Auto-scroll to bottom
-        self.scrollFrame:SetVerticalScroll(math.max(0, self.content:GetHeight() - self.scrollFrame:GetHeight()))
-    end
-
-    function panel:Clear()
-        for _, line in ipairs(self.lines) do
-            line:Hide()
-        end
-        self.lines = {}
-        self.content:SetHeight(self:GetHeight() - 10)
-    end
-
-    return panel
-end
-
--- Utility functions
-function UIFramework:GetColorForType(type)
     local colors = {
-        warning = {1, 0.8, 0},
-        error = {1, 0.3, 0.3},
-        info = {0.3, 0.8, 1},
-        success = {0.3, 1, 0.3},
-        debug = {0.7, 0.7, 0.7}
+        success = {0.2, 0.8, 0.2},
+        error = {0.8, 0.2, 0.2},
+        warning = {0.8, 0.8, 0.2},
+        info = {0.2, 0.6, 1}
     }
-    return colors[type] or colors.info
+
+    local color = colors[type] or colors.info
+    toast:SetBackdropColor(color[1], color[2], color[3], 0.9)
+
+    local message = toast:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    message:SetPoint("CENTER")
+    message:SetText(text)
+
+    -- Fade in
+    toast:SetAlpha(0)
+    toast:Show()
+
+    local fadeIn = toast:CreateAnimationGroup()
+    local alpha1 = fadeIn:CreateAnimation("Alpha")
+    alpha1:SetChange(1)
+    alpha1:SetDuration(0.2)
+    fadeIn:Play()
+
+    -- Auto hide
+    FizzureCommon:After(duration, function()
+        local fadeOut = toast:CreateAnimationGroup()
+        local alpha2 = fadeOut:CreateAnimation("Alpha")
+        alpha2:SetChange(-1)
+        alpha2:SetDuration(0.5)
+        fadeOut:Play()
+
+        fadeOut:SetScript("OnFinished", function()
+            toast:Hide()
+        end)
+    end)
+
+    return toast
 end
 
-function UIFramework:FormatTime(seconds)
-    if seconds < 60 then
-        return string.format("%.1fs", seconds)
-    elseif seconds < 3600 then
-        return string.format("%dm %ds", math.floor(seconds / 60), seconds % 60)
-    else
-        return string.format("%dh %dm", math.floor(seconds / 3600), math.floor((seconds % 3600) / 60))
+-- Context menu
+function UIFramework:CreateContextMenu(parent, items)
+    local menu = self:CreateFrame("Frame", nil, parent)
+    menu:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    menu:SetBackdropColor(0, 0, 0, 0.9)
+    menu:SetFrameStrata("DIALOG")
+    menu:Hide()
+
+    local height = 10
+    local maxWidth = 100
+
+    for i, item in ipairs(items) do
+        local button = self:CreateButton(menu, item.text, 0, 20, item.func)
+        button:SetPoint("TOPLEFT", 5, -height)
+        button:SetPoint("RIGHT", -5, 0)
+
+        local textWidth = button:GetFontString():GetStringWidth() + 20
+        if textWidth > maxWidth then
+            maxWidth = textWidth
+        end
+
+        height = height + 22
     end
+
+    menu:SetSize(maxWidth + 10, height)
+
+    -- Auto-hide on click outside
+    menu:SetScript("OnShow", function(self)
+        self:SetScript("OnUpdate", function(self)
+            if not MouseIsOver(self) then
+                self:Hide()
+                self:SetScript("OnUpdate", nil)
+            end
+        end)
+    end)
+
+    return menu
 end
 
-print("|cff00ff00Fizzure|r UI Framework Loaded")
+print("|cff00ff00Fizzure|r UI Framework loaded")
