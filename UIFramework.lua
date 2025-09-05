@@ -1,4 +1,4 @@
--- UIFramework.lua - Complete GUI system for Fizzure modules
+-- UIFramework.lua - GUI system for Fizzure modules
 local UIFramework = {}
 _G.FizzureUI = UIFramework
 
@@ -26,7 +26,7 @@ function UIFramework:CreateFrame(frameType, name, parent, template)
     return frame
 end
 
--- Window creation with all features
+-- Window creation with proper frame structure
 function UIFramework:CreateWindow(name, title, width, height, parent)
     local frame = self:CreateFrame("Frame", name, parent)
     frame:SetSize(width or 400, height or 300)
@@ -53,8 +53,8 @@ function UIFramework:CreateWindow(name, title, width, height, parent)
     -- Title bar
     local titleBar = self:CreateFrame("Frame", nil, frame)
     titleBar:SetHeight(32)
-    titleBar:SetPoint("TOPLEFT", 8, -8)
-    titleBar:SetPoint("TOPRIGHT", -8, -8)
+    titleBar:SetPoint("TOPLEFT", 12, -12)
+    titleBar:SetPoint("TOPRIGHT", -12, -12)
 
     local titleText = titleBar:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     titleText:SetPoint("CENTER", 0, 0)
@@ -64,15 +64,15 @@ function UIFramework:CreateWindow(name, title, width, height, parent)
 
     -- Close button
     local closeBtn = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", -5, -5)
+    closeBtn:SetPoint("TOPRIGHT", -8, -8)
     closeBtn:SetScript("OnClick", function()
         frame:Hide()
     end)
     frame.closeBtn = closeBtn
 
-    -- Content area
+    -- Content area - properly positioned below title bar
     local content = self:CreateFrame("Frame", nil, frame)
-    content:SetPoint("TOPLEFT", 12, -42)
+    content:SetPoint("TOPLEFT", 12, -44)
     content:SetPoint("BOTTOMRIGHT", -12, 12)
     frame.content = content
 
@@ -135,40 +135,40 @@ function UIFramework:CreateStatusFrame(name, title, width, height)
     return frame
 end
 
--- Scroll frame with proper implementation
+-- Scroll frame with corrected sizing and positioning
 function UIFramework:CreateScrollFrame(parent, width, height, scrollBarWidth, name)
     scrollBarWidth = scrollBarWidth or 20
     name = name or ((parent:GetName() or "FizzureParent") .. "_Scroll")
 
     local scrollFrame = CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetSize(width - scrollBarWidth, height)
+    scrollFrame:SetSize(width, height)
     scrollFrame:SetPoint("TOPLEFT")
 
+    -- Create scroll child with proper width calculation
     local scrollChild = CreateFrame("Frame", name .. "Child", scrollFrame)
-    scrollChild:SetSize(width - scrollBarWidth - 10, 1)
+    scrollChild:SetSize(width - scrollBarWidth, 1)
     scrollFrame:SetScrollChild(scrollChild)
 
     scrollFrame:EnableMouseWheel(true)
     scrollFrame:SetScript("OnMouseWheel", function(self, delta)
-        local current   = self:GetVerticalScroll()
+        local current = self:GetVerticalScroll()
         local maxScroll = self:GetVerticalScrollRange()
         local newScroll = FizzureCommon:Clamp(current - (delta * 30), 0, maxScroll)
         self:SetVerticalScroll(newScroll)
     end)
 
     function scrollFrame:UpdateScrollChildHeight()
-        local h = 0
+        local maxBottom = 0
         for i = 1, scrollChild:GetNumChildren() do
             local child = select(i, scrollChild:GetChildren())
             if child and child:IsShown() then
-                local bottom, childBottom = child:GetBottom(), scrollChild:GetBottom()
-                if bottom and childBottom then
-                    local ch = childBottom - bottom
-                    if ch > h then h = ch end
+                local _, _, _, _, bottom = child:GetPoint()
+                if bottom and math.abs(bottom) > maxBottom then
+                    maxBottom = math.abs(bottom)
                 end
             end
         end
-        scrollChild:SetHeight(math.max(h + 10, parent:GetHeight()))
+        scrollChild:SetHeight(math.max(maxBottom + 20, height))
     end
 
     scrollFrame.content = scrollChild
@@ -282,7 +282,7 @@ function UIFramework:CreateStatusBar(parent, width, height, min, max, value)
     })
     bar:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
 
-    -- Text overlay (raised to be visible)
+    -- Text overlay
     local text = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     text:SetPoint("CENTER", 0, 0)
     bar.text = text
@@ -292,6 +292,124 @@ function UIFramework:CreateStatusBar(parent, width, height, min, max, value)
     end
 
     return bar
+end
+
+-- Generic item slot for modules to use (replaces CreateFoodSlot)
+function UIFramework:CreateItemSlot(parent, index, onRightClick, onDrop, tooltip)
+    local slot = CreateFrame("Button", nil, parent)
+    slot:SetSize(40, 40)
+    slot:SetNormalTexture("Interface\\Buttons\\UI-EmptySlot-White")
+    slot:SetHighlightTexture("Interface\\Buttons\\UI-Panel-Button-Highlight")
+
+    -- Item texture
+    local texture = slot:CreateTexture(nil, "ARTWORK")
+    texture:SetSize(36, 36)
+    texture:SetPoint("CENTER")
+    slot.texture = texture
+
+    -- Count text
+    local countText = slot:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    countText:SetPoint("BOTTOMRIGHT", -2, 2)
+    slot.countText = countText
+
+    -- Click handling
+    slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    slot:SetScript("OnClick", function(self, button)
+        if button == "RightButton" and onRightClick then
+            onRightClick(index, self)
+        end
+    end)
+
+    -- Drag and drop
+    slot:RegisterForDrag("LeftButton")
+    slot:SetScript("OnReceiveDrag", function(self)
+        if onDrop then
+            onDrop(index, self)
+        end
+    end)
+
+    -- Tooltip
+    slot:SetScript("OnEnter", function(self)
+        if self.itemLink then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink(self.itemLink)
+            GameTooltip:Show()
+        else
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(tooltip and tooltip.empty or "Empty Slot")
+            GameTooltip:AddLine(tooltip and tooltip.instruction or "Drag item here", 0.7, 0.7, 0.7)
+            GameTooltip:Show()
+        end
+    end)
+
+    slot:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    -- Helper methods
+    function slot:SetItem(itemName, itemLink)
+        self.itemName = itemName
+        self.itemLink = itemLink or itemName
+
+        if itemName then
+            -- Multiple approaches to get item icon
+            local itemIcon = nil
+
+            -- Try GetItemIcon first
+            if GetItemIcon then
+                itemIcon = GetItemIcon(itemName)
+            end
+
+            -- Try from item info
+            if not itemIcon then
+                local info = {GetItemInfo(itemName)}
+                if info and info[10] then
+                    itemIcon = info[10]
+                end
+            end
+
+            -- Try from link if available
+            if not itemIcon and itemLink and itemLink ~= itemName then
+                local info = {GetItemInfo(itemLink)}
+                if info and info[10] then
+                    itemIcon = info[10]
+                end
+            end
+
+            -- Set the texture
+            if itemIcon then
+                self.texture:SetTexture(itemIcon)
+            else
+                -- Use a default food icon
+                self.texture:SetTexture("Interface\\Icons\\INV_Misc_Food_01")
+            end
+            self.texture:Show()
+
+            -- Update count
+            local count = FizzureCommon:GetItemCount(itemName)
+            if count and count > 1 then
+                self.countText:SetText(count)
+                self.countText:Show()
+            else
+                self.countText:SetText("")
+                self.countText:Hide()
+            end
+        else
+            self:ClearItem()
+        end
+    end
+
+    function slot:ClearItem()
+        self.itemName = nil
+        self.itemLink = nil
+        self.texture:SetTexture(nil)
+        self.texture:Hide()
+        self.countText:SetText("")
+        self.countText:Hide()
+    end
+
+    slot.index = index
+    return slot
 end
 
 -- Dropdown menu
@@ -340,7 +458,7 @@ function UIFramework:CreateSlider(parent, name, min, max, value, step, onChange)
     return slider
 end
 
--- Tab system
+-- Tab system with proper layout
 function UIFramework:CreateTabPanel(parent, tabs)
     local tabPanel = self:CreateFrame("Frame", nil, parent)
     tabPanel:SetAllPoints()
@@ -350,7 +468,7 @@ function UIFramework:CreateTabPanel(parent, tabs)
     tabPanel.selectedTab = 1
 
     local tabHeight = 32
-    local tabWidth = 100
+    local tabWidth = math.min(120, parent:GetWidth() / #tabs)
 
     for i, tabInfo in ipairs(tabs) do
         -- Tab button
@@ -390,95 +508,7 @@ function UIFramework:CreateTabPanel(parent, tabs)
     end
 
     tabPanel:SelectTab(1)
-
     return tabPanel
-end
-
--- Food slot for hunter module
-function UIFramework:CreateFoodSlot(parent, index, onRightClick, onDrop)
-    local slot = CreateFrame("Button", nil, parent)
-    slot:SetSize(40, 40)
-    slot:SetNormalTexture("Interface\\Buttons\\UI-EmptySlot-White")
-    slot:SetHighlightTexture("Interface\\Buttons\\UI-Panel-Button-Highlight")
-
-    -- Item texture
-    local texture = slot:CreateTexture(nil, "ARTWORK")
-    texture:SetSize(36, 36)
-    texture:SetPoint("CENTER")
-    slot.texture = texture
-
-    -- Count text
-    local countText = slot:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-    countText:SetPoint("BOTTOMRIGHT", -2, 2)
-    slot.countText = countText
-
-    -- Click handling
-    slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    slot:SetScript("OnClick", function(self, button)
-        if button == "RightButton" and onRightClick then
-            onRightClick(index, self)
-        end
-    end)
-
-    -- Drag and drop
-    slot:RegisterForDrag("LeftButton")
-    slot:SetScript("OnReceiveDrag", function(self)
-        if onDrop then
-            onDrop(index, self)
-        end
-    end)
-
-    -- Tooltip
-    slot:SetScript("OnEnter", function(self)
-        if self.itemLink then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetHyperlink(self.itemLink)
-            GameTooltip:Show()
-        else
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Empty Slot")
-            GameTooltip:AddLine("Drag item here or right-click from list", 0.7, 0.7, 0.7)
-            GameTooltip:Show()
-        end
-    end)
-
-    slot:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
-
-    -- Helper methods
-    function slot:SetItem(itemName, itemLink)
-        self.itemName = itemName
-        self.itemLink = itemLink
-
-        if itemName then
-            local itemIcon = GetItemIcon(itemName) or GetItemIcon(itemLink)
-            if itemIcon then
-                self.texture:SetTexture(itemIcon)
-                self.texture:Show()
-            end
-
-            local count = FizzureCommon:GetItemCount(itemName)
-            if count > 1 then
-                self.countText:SetText(count)
-            else
-                self.countText:SetText("")
-            end
-        else
-            self:ClearItem()
-        end
-    end
-
-    function slot:ClearItem()
-        self.itemName = nil
-        self.itemLink = nil
-        self.texture:SetTexture(nil)
-        self.texture:Hide()
-        self.countText:SetText("")
-    end
-
-    slot.index = index
-    return slot
 end
 
 -- Text label

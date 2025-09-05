@@ -1,4 +1,4 @@
--- Fizzure.lua - Core modular framework with proper persistence
+-- Fizzure.lua - Core modular framework with actually working UI layout
 local addonName = "Fizzure"
 local fizzure = {}
 _G[addonName] = fizzure
@@ -59,6 +59,7 @@ function fizzure:Initialize()
     mainFrame:RegisterEvent("ADDON_LOADED")
     mainFrame:RegisterEvent("PLAYER_LOGIN")
     mainFrame:RegisterEvent("PLAYER_LOGOUT")
+    mainFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     mainFrame:SetScript("OnEvent", function(self, event, ...) fizzure:OnEvent(event, ...) end)
 
     -- Initialize UI components
@@ -66,6 +67,11 @@ function fizzure:Initialize()
     self:CreateMainWindow()
     self:CreateNotificationSystem()
     self:InitializeDebugSystem()
+
+    -- Periodic save timer (every 30 seconds)
+    self.saveTimer = FizzureCommon:NewTicker(30, function()
+        self:SaveSettings()
+    end)
 
     if _G.FizzureSecure and type(_G.FizzureSecure.Initialize) == "function" then
         _G.FizzureSecure:Initialize()
@@ -105,15 +111,26 @@ function fizzure:OnEvent(event, ...)
             self:Initialize()
         end
     elseif event == "PLAYER_LOGIN" then
-        -- Initialize enabled modules
-        FizzureCommon:After(0.5, function()
-            for moduleName, _ in pairs(self.db.enabledModules) do
-                if self.db.enabledModules[moduleName] then
-                    self:EnableModule(moduleName)
+        -- Initialize enabled modules after a short delay to ensure all addons are loaded
+        FizzureCommon:After(1.0, function()
+            for moduleName, enabled in pairs(self.db.enabledModules) do
+                if enabled then
+                    local success = self:EnableModule(moduleName)
+                    if not success then
+                        self.db.enabledModules[moduleName] = false
+                    end
                 end
             end
+            self:SaveSettings()
         end)
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        -- Ensure settings are saved when entering world
+        self:SaveSettings()
     elseif event == "PLAYER_LOGOUT" then
+        -- Cancel save timer and do final save
+        if self.saveTimer then
+            self.saveTimer:Cancel()
+        end
         self:SaveSettings()
     end
 end
@@ -210,13 +227,13 @@ function fizzure:EnableModule(name)
     end
 
     self.db.enabledModules[name] = true
-    self:SaveSettings()
+    self:SaveSettings() -- Force save immediately
 
     if module.Initialize then
         local success = module:Initialize()
         if success == false then
             self.db.enabledModules[name] = false
-            self:SaveSettings()
+            self:SaveSettings() -- Save the failure state too
             return false
         end
     end
@@ -239,7 +256,7 @@ function fizzure:DisableModule(name)
     end
 
     self.db.enabledModules[name] = false
-    self:SaveSettings()
+    self:SaveSettings() -- Force save immediately
 
     if module.Shutdown then
         module:Shutdown()
@@ -261,6 +278,8 @@ function fizzure:SetModuleSettings(moduleName, settings)
     end
 
     self.db.moduleSettings[moduleName] = settings
+
+    -- Force immediate save for persistence
     self:SaveSettings()
 
     -- Sync with framework settings if applicable
@@ -348,19 +367,24 @@ function fizzure:CreateMinimapButton()
     self.frames.minimapButton = button
 end
 
--- Create main window
+-- Create main window with actually working layout
 function fizzure:CreateMainWindow()
     local frame = FizzureUI:CreateWindow("FizzureMainWindow", "Fizzure Control Center", 700, 500)
 
-    -- Category tabs
+    -- Category tabs at the very top
     frame.categoryTabs = {}
     frame.selectedCategory = "Class-Specific"
+
+    local tabContainer = CreateFrame("Frame", nil, frame.content)
+    tabContainer:SetHeight(30)
+    tabContainer:SetPoint("TOPLEFT", 0, -5)
+    tabContainer:SetPoint("TOPRIGHT", 0, -5)
 
     local tabWidth = 100
     local tabIndex = 0
     for categoryName, _ in pairs(self.moduleCategories) do
-        local tab = FizzureUI:CreateButton(frame, categoryName, tabWidth, 25)
-        tab:SetPoint("TOPLEFT", 20 + (tabIndex * tabWidth), -45)
+        local tab = FizzureUI:CreateButton(tabContainer, categoryName, tabWidth, 25)
+        tab:SetPoint("LEFT", tabIndex * (tabWidth + 5), 0)
 
         tab:SetScript("OnClick", function()
             fizzure:SelectCategory(categoryName)
@@ -370,31 +394,59 @@ function fizzure:CreateMainWindow()
         tabIndex = tabIndex + 1
     end
 
-    -- Module list
-    local moduleList = FizzureUI:CreateScrollFrame(frame, 200, 350)
-    moduleList:SetPoint("TOPLEFT", 20, -75)
+    -- Main content area - between tabs and status bar
+    local contentArea = CreateFrame("Frame", nil, frame.content)
+    contentArea:SetPoint("TOPLEFT", 0, -40)  -- Below tabs
+    contentArea:SetPoint("BOTTOMRIGHT", 0, 40) -- Above status bar
+
+    -- Left panel - Module list
+    local moduleListPanel = FizzureUI:CreatePanel(contentArea, 240, 1)
+    moduleListPanel:SetPoint("TOPLEFT", 10, 0)
+    moduleListPanel:SetPoint("BOTTOMLEFT", 10, 0)
+
+    local moduleLabel = FizzureUI:CreateLabel(moduleListPanel, "Modules", "GameFontNormalLarge")
+    moduleLabel:SetPoint("TOP", 0, -10)
+
+    local moduleList = FizzureUI:CreateScrollFrame(moduleListPanel, 220, 1, 20)
+    moduleList:SetPoint("TOPLEFT", 10, -30)
+    moduleList:SetPoint("BOTTOMRIGHT", -10, 10)
     frame.moduleList = moduleList
 
-    -- Details panel
-    local detailsPanel = FizzureUI:CreatePanel(frame, 450, 350)
-    detailsPanel:SetPoint("TOPRIGHT", -20, -75)
-    frame.detailsPanel = detailsPanel
+    -- Right panel - Module details
+    local detailsPanel = FizzureUI:CreatePanel(contentArea, 1, 1)
+    detailsPanel:SetPoint("TOPLEFT", moduleListPanel, "TOPRIGHT", 10, 0)
+    detailsPanel:SetPoint("BOTTOMRIGHT", -10, 0)
 
-    -- Status bar
-    local statusBar = FizzureUI:CreatePanel(frame, 680, 35)
-    statusBar:SetPoint("BOTTOM", 0, 10)
+    local detailsLabel = FizzureUI:CreateLabel(detailsPanel, "Module Details", "GameFontNormalLarge")
+    detailsLabel:SetPoint("TOP", 0, -10)
 
-    local statusText = FizzureUI:CreateLabel(statusBar, "Ready")
-    statusText:SetPoint("LEFT", 10, 5)
+    -- This is the actual content area for module details
+    local detailsContent = CreateFrame("ScrollFrame", nil, detailsPanel)
+    detailsContent:SetPoint("TOPLEFT", 10, -30)
+    detailsContent:SetPoint("BOTTOMRIGHT", -10, 10)
+
+    local detailsScrollChild = CreateFrame("Frame", nil, detailsContent)
+    detailsScrollChild:SetSize(400, 1)
+    detailsContent:SetScrollChild(detailsScrollChild)
+
+    frame.detailsContent = detailsScrollChild
+
+    -- Status bar - fixed at bottom
+    local statusBar = FizzureUI:CreatePanel(frame.content, 1, 30)
+    statusBar:SetPoint("BOTTOMLEFT", 0, 5)
+    statusBar:SetPoint("BOTTOMRIGHT", 0, 5)
+
+    local statusText = FizzureUI:CreateLabel(statusBar, "Ready", "GameFontNormal")
+    statusText:SetPoint("LEFT", 10, 0)
 
     local debugBtn = FizzureUI:CreateButton(statusBar, "Debug: OFF", 80, 20, function()
         fizzure:ToggleDebug()
         debugBtn:SetText("Debug: " .. (fizzure.debug.enabled and fizzure.debug.level or "OFF"))
     end)
-    debugBtn:SetPoint("RIGHT", -100, 0)
+    debugBtn:SetPoint("RIGHT", -90, 0)
 
     local reloadBtn = FizzureUI:CreateButton(statusBar, "Reload UI", 80, 20, ReloadUI)
-    reloadBtn:SetPoint("RIGHT", -10, 0)
+    reloadBtn:SetPoint("RIGHT", -5, 0)
 
     frame.statusText = statusText
     frame.debugBtn = debugBtn
@@ -404,24 +456,27 @@ function fizzure:CreateMainWindow()
     function frame:UpdateModuleList()
         local content = self.moduleList.content
 
-        -- Clear existing
-        for i = content:GetNumChildren(), 1, -1 do
-            select(i, content:GetChildren()):Hide()
+        -- Clear existing items
+        for i = 1, content:GetNumChildren() do
+            local child = select(i, content:GetChildren())
+            if child then
+                child:Hide()
+            end
         end
 
         local yOffset = -10
         local categoryModules = fizzure.moduleCategories[self.selectedCategory] or {}
 
         for moduleName, module in pairs(categoryModules) do
-            local button = FizzureUI:CreateButton(content, moduleName, 180, 35, function()
+            local button = FizzureUI:CreateButton(content, moduleName, 200, 30, function()
                 fizzure:ShowModuleDetails(moduleName, module)
             end)
-            button:SetPoint("TOPLEFT", 10, yOffset)
+            button:SetPoint("TOPLEFT", 5, yOffset)
 
             -- Status indicator
             local status = content:CreateTexture(nil, "OVERLAY")
             status:SetSize(12, 12)
-            status:SetPoint("RIGHT", button, "RIGHT", -5, 0)
+            status:SetPoint("RIGHT", button, "RIGHT", -10, 0)
 
             if fizzure.db.enabledModules[moduleName] then
                 status:SetTexture("Interface\\FriendsFrame\\StatusIcon-Online")
@@ -429,7 +484,7 @@ function fizzure:CreateMainWindow()
                 status:SetTexture("Interface\\FriendsFrame\\StatusIcon-Offline")
             end
 
-            yOffset = yOffset - 40
+            yOffset = yOffset - 35
         end
 
         self.moduleList:UpdateScrollChildHeight()
@@ -446,6 +501,7 @@ function fizzure:SelectCategory(categoryName)
 
     frame.selectedCategory = categoryName
 
+    -- Update tab appearance
     for name, tab in pairs(frame.categoryTabs) do
         if name == categoryName then
             tab:SetAlpha(1)
@@ -457,17 +513,20 @@ function fizzure:SelectCategory(categoryName)
     frame:UpdateModuleList()
 end
 
--- Show module details
+-- Actually clear and show module details
 function fizzure:ShowModuleDetails(moduleName, module)
-    local panel = self.frames.mainWindow.detailsPanel
+    local panel = self.frames.mainWindow.detailsContent
     if not panel then return end
 
-    -- Clear panel
-    for i = panel:GetNumChildren(), 1, -1 do
-        select(i, panel:GetChildren()):Hide()
+    -- ACTUALLY clear the panel by removing all children completely
+    local children = {panel:GetChildren()}
+    for i = 1, #children do
+        children[i]:Hide()
+        children[i]:SetParent(UIParent)
+        children[i]:ClearAllPoints()
     end
 
-    local y = -20
+    local y = -10
 
     local title = FizzureUI:CreateLabel(panel, moduleName, "GameFontNormalLarge")
     title:SetPoint("TOP", 0, y)
@@ -483,10 +542,12 @@ function fizzure:ShowModuleDetails(moduleName, module)
                 if checked then
                     if not fizzure:EnableModule(moduleName) then
                         enableCheck:SetChecked(false)
+                        fizzure:ShowNotification("Enable Failed", "Could not enable " .. moduleName, "error", 3)
                     end
                 else
                     if not fizzure:DisableModule(moduleName) then
                         enableCheck:SetChecked(true)
+                        fizzure:ShowNotification("Disable Failed", "Could not disable " .. moduleName, "error", 3)
                     end
                 end
                 fizzure.frames.mainWindow:UpdateModuleList()
@@ -494,13 +555,29 @@ function fizzure:ShowModuleDetails(moduleName, module)
     enableCheck:SetPoint("TOPLEFT", 20, y)
     y = y - 40
 
-    -- Module config
-    if module.CreateConfigUI then
+    -- Only show module config if module is enabled and has settings
+    if module.CreateConfigUI and self.db.enabledModules[moduleName] then
         local configLabel = FizzureUI:CreateLabel(panel, "Module Configuration:", "GameFontNormal")
         configLabel:SetPoint("TOPLEFT", 20, y)
         y = y - 25
 
-        y = module:CreateConfigUI(panel, 20, y)
+        -- Safely call CreateConfigUI with error handling
+        local success, newY = pcall(function()
+            return module:CreateConfigUI(panel, 20, y)
+        end)
+
+        if success and newY then
+            y = newY
+        else
+            local errorLabel = FizzureUI:CreateLabel(panel, "Configuration error: Module not properly initialized", "GameFontNormalSmall")
+            errorLabel:SetPoint("TOPLEFT", 20, y)
+            errorLabel:SetTextColor(1, 0.5, 0.5)
+            y = y - 20
+        end
+    elseif not self.db.enabledModules[moduleName] then
+        local disabledLabel = FizzureUI:CreateLabel(panel, "Enable module to configure settings", "GameFontNormal")
+        disabledLabel:SetPoint("TOPLEFT", 20, y)
+        disabledLabel:SetTextColor(0.7, 0.7, 0.7)
     end
 end
 
@@ -653,14 +730,14 @@ function fizzure:CreateDebugFrame()
     local frame = FizzureUI:CreateWindow("FizzureDebugFrame", "Debug Console", 500, 300)
     frame:SetPoint("TOPRIGHT", -20, -100)
 
-    local clearBtn = FizzureUI:CreateButton(frame, "Clear", 60, 20, function()
+    local clearBtn = FizzureUI:CreateButton(frame.content, "Clear", 60, 20, function()
         self.debug.logHistory = {}
         self:UpdateDebugFrame()
     end)
-    clearBtn:SetPoint("TOPRIGHT", -30, -35)
+    clearBtn:SetPoint("TOPRIGHT", -30, -10)
 
     local scrollFrame = FizzureUI:CreateScrollFrame(frame.content, 480, 240)
-    scrollFrame:SetPoint("TOP", 0, -20)
+    scrollFrame:SetPoint("TOPLEFT", 0, -40)
 
     frame.scrollFrame = scrollFrame
     self.frames.debugFrame = frame
