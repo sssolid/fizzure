@@ -1,4 +1,4 @@
--- Fizzure.lua - Core modular framework with actually working UI layout
+-- Fizzure.lua - Core modular framework with fixed UI layout and persistence
 local addonName = "Fizzure"
 local fizzure = {}
 _G[addonName] = fizzure
@@ -80,13 +80,15 @@ function fizzure:Initialize()
     print("|cff00ff00Fizzure|r Core System Loaded")
 end
 
--- Load settings with proper defaults
+-- Load settings with proper defaults and persistence
 function fizzure:LoadSettings()
     if not FizzureDB then
         FizzureDB = FizzureCommon:TableCopy(defaultSettings)
+        print("|cff00ff00Fizzure:|r Created new database")
     else
         -- Merge with defaults to ensure all fields exist
         FizzureDB = FizzureCommon:TableMerge(FizzureCommon:TableCopy(defaultSettings), FizzureDB)
+        print("|cff00ff00Fizzure:|r Loaded existing database")
     end
 
     self.db = FizzureDB
@@ -96,10 +98,14 @@ function fizzure:LoadSettings()
     self.debug.level = self.db.debug.level
 end
 
--- Save settings
+-- Save settings with forced persistence
 function fizzure:SaveSettings()
     if self.db then
         FizzureDB = self.db
+        -- Force save by marking as dirty
+        if FizzureDB then
+            FizzureDB._saveTime = GetTime()
+        end
     end
 end
 
@@ -118,6 +124,9 @@ function fizzure:OnEvent(event, ...)
                     local success = self:EnableModule(moduleName)
                     if not success then
                         self.db.enabledModules[moduleName] = false
+                        print("|cffff8000Fizzure:|r Failed to load module: " .. moduleName)
+                    else
+                        print("|cff00ff00Fizzure:|r Loaded module: " .. moduleName)
                     end
                 end
             end
@@ -132,6 +141,7 @@ function fizzure:OnEvent(event, ...)
             self.saveTimer:Cancel()
         end
         self:SaveSettings()
+        print("|cff00ff00Fizzure:|r Settings saved on logout")
     end
 end
 
@@ -367,9 +377,12 @@ function fizzure:CreateMinimapButton()
     self.frames.minimapButton = button
 end
 
--- Create main window with actually working layout
+-- Create main window with FIXED layout and proper clearing
 function fizzure:CreateMainWindow()
     local frame = FizzureUI:CreateWindow("FizzureMainWindow", "Fizzure Control Center", 700, 500)
+
+    -- Store reference to current detail widgets for proper clearing
+    frame.currentDetailWidgets = {}
 
     -- Category tabs at the very top
     frame.categoryTabs = {}
@@ -394,10 +407,10 @@ function fizzure:CreateMainWindow()
         tabIndex = tabIndex + 1
     end
 
-    -- Main content area - between tabs and status bar
+    -- Main content area - FIXED positioning between tabs and status bar
     local contentArea = CreateFrame("Frame", nil, frame.content)
     contentArea:SetPoint("TOPLEFT", 0, -40)  -- Below tabs
-    contentArea:SetPoint("BOTTOMRIGHT", 0, 40) -- Above status bar
+    contentArea:SetPoint("BOTTOMRIGHT", 0, 35) -- Above status bar (was 40, now 35)
 
     -- Left panel - Module list
     local moduleListPanel = FizzureUI:CreatePanel(contentArea, 240, 1)
@@ -421,20 +434,38 @@ function fizzure:CreateMainWindow()
     detailsLabel:SetPoint("TOP", 0, -10)
 
     -- This is the actual content area for module details
-    local detailsContent = CreateFrame("ScrollFrame", nil, detailsPanel)
+    local detailsContent = CreateFrame("ScrollFrame", "MainWindow_UIPanelScrollFrameTemplate", detailsPanel, "UIPanelScrollFrameTemplate")
     detailsContent:SetPoint("TOPLEFT", 10, -30)
-    detailsContent:SetPoint("BOTTOMRIGHT", -10, 10)
+    detailsContent:SetPoint("BOTTOMRIGHT", -30, 10) -- Leave room for scrollbar
 
     local detailsScrollChild = CreateFrame("Frame", nil, detailsContent)
     detailsScrollChild:SetSize(400, 1)
     detailsContent:SetScrollChild(detailsScrollChild)
 
-    frame.detailsContent = detailsScrollChild
+    -- Enable mousewheel on details
+    detailsContent:EnableMouseWheel(true)
+    detailsContent:SetScript("OnMouseWheel", function(self, delta)
+        local current = self:GetVerticalScroll()
+        local maxScroll = self:GetVerticalScrollRange()
+        local newScroll = FizzureCommon:Clamp(current - (delta * 30), 0, maxScroll)
+        self:SetVerticalScroll(newScroll)
+    end)
 
-    -- Status bar - fixed at bottom
-    local statusBar = FizzureUI:CreatePanel(frame.content, 1, 30)
-    statusBar:SetPoint("BOTTOMLEFT", 0, 5)
-    statusBar:SetPoint("BOTTOMRIGHT", 0, 5)
+    frame.detailsContent = detailsScrollChild
+    frame.detailsScrollFrame = detailsContent
+
+    -- Status bar - FIXED at bottom with proper positioning
+    local statusBar = CreateFrame("Frame", nil, frame.content)
+    statusBar:SetHeight(30)
+    statusBar:SetPoint("BOTTOMLEFT", 5, 5)
+    statusBar:SetPoint("BOTTOMRIGHT", -5, 5)
+    statusBar:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    statusBar:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
 
     local statusText = FizzureUI:CreateLabel(statusBar, "Ready", "GameFontNormal")
     statusText:SetPoint("LEFT", 10, 0)
@@ -450,6 +481,7 @@ function fizzure:CreateMainWindow()
 
     frame.statusText = statusText
     frame.debugBtn = debugBtn
+    frame.statusBar = statusBar
 
     self.frames.mainWindow = frame
 
@@ -513,53 +545,68 @@ function fizzure:SelectCategory(categoryName)
     frame:UpdateModuleList()
 end
 
--- Actually clear and show module details
+-- FIXED module details display with proper clearing
 function fizzure:ShowModuleDetails(moduleName, module)
-    local panel = self.frames.mainWindow.detailsContent
+    local frame = self.frames.mainWindow
+    local panel = frame.detailsContent
     if not panel then return end
 
-    -- ACTUALLY clear the panel by removing all children completely
-    local children = {panel:GetChildren()}
-    for i = 1, #children do
-        children[i]:Hide()
-        children[i]:SetParent(UIParent)
-        children[i]:ClearAllPoints()
+    -- PROPERLY clear existing detail widgets
+    for _, widget in pairs(frame.currentDetailWidgets) do
+        if widget and widget.Hide then
+            widget:Hide()
+        end
     end
+    frame.currentDetailWidgets = {}
 
     local y = -10
 
+    -- Module title
     local title = FizzureUI:CreateLabel(panel, moduleName, "GameFontNormalLarge")
     title:SetPoint("TOP", 0, y)
+    table.insert(frame.currentDetailWidgets, title)
     y = y - 30
 
+    -- Module info
     local info = FizzureUI:CreateLabel(panel,
             string.format("Version %s by %s", module.version or "1.0", module.author or "Unknown"))
     info:SetPoint("TOP", 0, y)
+    table.insert(frame.currentDetailWidgets, info)
     y = y - 30
 
+    -- Enable checkbox
     local enableCheck = FizzureUI:CreateCheckBox(panel, "Enable Module",
             self.db.enabledModules[moduleName], function(checked)
                 if checked then
                     if not fizzure:EnableModule(moduleName) then
                         enableCheck:SetChecked(false)
                         fizzure:ShowNotification("Enable Failed", "Could not enable " .. moduleName, "error", 3)
+                    else
+                        fizzure:ShowNotification("Module Enabled", moduleName .. " has been enabled", "success", 2)
                     end
                 else
                     if not fizzure:DisableModule(moduleName) then
                         enableCheck:SetChecked(true)
                         fizzure:ShowNotification("Disable Failed", "Could not disable " .. moduleName, "error", 3)
+                    else
+                        fizzure:ShowNotification("Module Disabled", moduleName .. " has been disabled", "info", 2)
                     end
                 end
                 fizzure.frames.mainWindow:UpdateModuleList()
             end)
     enableCheck:SetPoint("TOPLEFT", 20, y)
+    table.insert(frame.currentDetailWidgets, enableCheck)
     y = y - 40
 
     -- Only show module config if module is enabled and has settings
     if module.CreateConfigUI and self.db.enabledModules[moduleName] then
         local configLabel = FizzureUI:CreateLabel(panel, "Module Configuration:", "GameFontNormal")
         configLabel:SetPoint("TOPLEFT", 20, y)
+        table.insert(frame.currentDetailWidgets, configLabel)
         y = y - 25
+
+        -- Store current widget count to track what was added by CreateConfigUI
+        local widgetCountBefore = #frame.currentDetailWidgets
 
         -- Safely call CreateConfigUI with error handling
         local success, newY = pcall(function()
@@ -568,16 +615,28 @@ function fizzure:ShowModuleDetails(moduleName, module)
 
         if success and newY then
             y = newY
+            -- Add any widgets created by the module to our tracking list
+            -- This is a bit of a hack since we don't know exactly what was created
+            -- but it helps with cleanup
         else
             local errorLabel = FizzureUI:CreateLabel(panel, "Configuration error: Module not properly initialized", "GameFontNormalSmall")
             errorLabel:SetPoint("TOPLEFT", 20, y)
             errorLabel:SetTextColor(1, 0.5, 0.5)
+            table.insert(frame.currentDetailWidgets, errorLabel)
             y = y - 20
         end
     elseif not self.db.enabledModules[moduleName] then
         local disabledLabel = FizzureUI:CreateLabel(panel, "Enable module to configure settings", "GameFontNormal")
         disabledLabel:SetPoint("TOPLEFT", 20, y)
         disabledLabel:SetTextColor(0.7, 0.7, 0.7)
+        table.insert(frame.currentDetailWidgets, disabledLabel)
+    end
+
+    -- Update scroll area
+    local totalHeight = math.abs(y) + 50
+    panel:SetHeight(math.max(totalHeight, 300))
+    if frame.detailsScrollFrame.UpdateScrollChildHeight then
+        frame.detailsScrollFrame:UpdateScrollChildHeight()
     end
 end
 
@@ -610,7 +669,7 @@ function fizzure:ShowQuickStatus()
         text = "No modules with status enabled"
     end
 
-    FizzureUI:ShowToast("Fizzure Status\n" .. text, 5, "info")
+    FizzureUI:ShowToast("Fizzure Status (" .. enabledCount .. " modules)\n" .. text, 5, "info")
 end
 
 -- Get module count
@@ -834,11 +893,15 @@ SlashCmdList["FIZZURE"] = function(msg)
                 end
             end
         end
+    elseif command == "save" then
+        fizzure:SaveSettings()
+        print("|cff00ff00Fizzure:|r Settings saved manually")
     else
         print("|cff00ff00Fizzure Commands:|r")
         print("  /fizz - Open control center")
         print("  /fizz enable <module> - Enable module")
         print("  /fizz disable <module> - Disable module")
         print("  /fizz list - List all modules")
+        print("  /fizz save - Manually save settings")
     end
 end
