@@ -1,8 +1,8 @@
--- GearScore.lua - Gear Score Calculator Module for Fizzure
+-- GearScore.lua - Enhanced Gear Score Calculator with Group/Inspect Support
 local GearScoreModule = {}
 
 GearScoreModule.name = "Gear Score Calculator"
-GearScoreModule.version = "1.0"
+GearScoreModule.version = "1.1"
 GearScoreModule.author = "Fizzure"
 GearScoreModule.category = "UI/UX"
 
@@ -48,7 +48,8 @@ function GearScoreModule:GetDefaultSettings()
         showTooltip = true,
         showInspect = true,
         showGroupMembers = true,
-        showMinimapButton = true,
+        showOtherPlayers = true,
+        inspectOnTarget = true,
         colorThresholds = {
             {score = 0, color = {0.7, 0.7, 0.7}},     -- Gray
             {score = 1000, color = {1, 1, 1}},         -- White
@@ -81,13 +82,12 @@ function GearScoreModule:Initialize()
 
     -- Initialize cache
     self.gearScoreCache = {}
+    self.inspectQueue = {}
     self.lastCacheUpdate = 0
 
     -- Create UI elements
     self:CreateGearScoreFrame()
-    if self.settings.showMinimapButton then
-        self:CreateMinimapButton()
-    end
+    self:CreateInspectFrame()
 
     -- Hook tooltip functions
     self:HookTooltips()
@@ -98,14 +98,17 @@ function GearScoreModule:Initialize()
     self.eventFrame:RegisterEvent("INSPECT_READY")
     self.eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
     self.eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
+    self.eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
+    self.eventFrame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 
     self.eventFrame:SetScript("OnEvent", function(self, event, ...)
         GearScoreModule:OnEvent(event, ...)
     end)
 
-    -- Update timer for cache cleanup
-    self.updateTimer = FizzureCommon:NewTicker(30, function()
+    -- Update timer for cache cleanup and group updates
+    self.updateTimer = FizzureCommon:NewTicker(5, function()
         self:CleanCache()
+        self:UpdateGroupGearScores()
         self:UpdateGearScoreFrame()
     end)
 
@@ -129,8 +132,8 @@ function GearScoreModule:Shutdown()
         self.gearScoreFrame:Hide()
     end
 
-    if self.minimapButton then
-        self.minimapButton:Hide()
+    if self.inspectFrame then
+        self.inspectFrame:Hide()
     end
 
     -- Unhook tooltips
@@ -148,8 +151,17 @@ function GearScoreModule:OnEvent(event, ...)
             self:CalculateInspectGearScore(guid)
         end
     elseif event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE" then
-        -- Group composition changed, clear relevant cache
+        -- Group composition changed, clear relevant cache and update
         self:ClearGroupCache()
+        self:UpdateGroupGearScores()
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        if self.settings.inspectOnTarget then
+            self:InspectTarget()
+        end
+    elseif event == "UPDATE_MOUSEOVER_UNIT" then
+        if self.settings.showOtherPlayers then
+            self:InspectMouseover()
+        end
     end
 end
 
@@ -211,6 +223,7 @@ function GearScoreModule:CalculateInspectGearScore(guid)
 
     local totalScore = 0
     local itemCount = 0
+    local breakdown = {}
 
     for slot, weight in pairs(GEARSCORE_WEIGHTS) do
         if weight > 0 then
@@ -222,6 +235,11 @@ function GearScoreModule:CalculateInspectGearScore(guid)
                 if score > 0 then
                     totalScore = totalScore + score
                     itemCount = itemCount + 1
+                    breakdown[slot] = {
+                        link = itemLink,
+                        score = score,
+                        weight = weight
+                    }
                 end
             end
         end
@@ -232,28 +250,124 @@ function GearScoreModule:CalculateInspectGearScore(guid)
     -- Cache the result
     self.gearScoreCache[guid] = {
         score = finalScore,
+        breakdown = breakdown,
         timestamp = GetTime(),
-        itemCount = itemCount
+        itemCount = itemCount,
+        unitName = UnitName(unit)
     }
 
+    -- Update inspect frame if showing this unit
+    if self.inspectFrame and self.inspectFrame:IsShown() and self.inspectFrame.currentGUID == guid then
+        self:UpdateInspectFrame(guid)
+    end
+
     return finalScore
+end
+
+-- Inspect target player
+function GearScoreModule:InspectTarget()
+    if not UnitExists("target") or not UnitIsPlayer("target") then return end
+
+    local guid = UnitGUID("target")
+    if not guid or guid == UnitGUID("player") then return end
+
+    -- Check if we already have recent data
+    local cached = self.gearScoreCache[guid]
+    if cached and GetTime() - cached.timestamp < 30 then return end
+
+    -- Queue for inspection
+    table.insert(self.inspectQueue, {guid = guid, unit = "target"})
+
+    -- Process queue
+    self:ProcessInspectQueue()
+end
+
+-- Inspect mouseover player
+function GearScoreModule:InspectMouseover()
+    if not UnitExists("mouseover") or not UnitIsPlayer("mouseover") then return end
+
+    local guid = UnitGUID("mouseover")
+    if not guid or guid == UnitGUID("player") then return end
+
+    -- Check if we already have recent data
+    local cached = self.gearScoreCache[guid]
+    if cached and GetTime() - cached.timestamp < 60 then return end
+
+    -- Queue for inspection
+    table.insert(self.inspectQueue, {guid = guid, unit = "mouseover"})
+
+    -- Process queue with delay for mouseover
+    FizzureCommon:After(0.5, function()
+        self:ProcessInspectQueue()
+    end)
+end
+
+-- Process inspect queue
+function GearScoreModule:ProcessInspectQueue()
+    if #self.inspectQueue == 0 then return end
+
+    local entry = table.remove(self.inspectQueue, 1)
+    local unit = self:GetUnitFromGUID(entry.guid)
+
+    if unit and UnitIsConnected(unit) and CheckInteractDistance(unit, 1) then
+        NotifyInspect(unit)
+    end
+
+    -- Continue processing queue
+    if #self.inspectQueue > 0 then
+        FizzureCommon:After(1, function()
+            self:ProcessInspectQueue()
+        end)
+    end
+end
+
+-- Update group member gear scores
+function GearScoreModule:UpdateGroupGearScores()
+    if not self.settings.showGroupMembers then return end
+
+    local groupSize = GetNumPartyMembers()
+    if GetNumRaidMembers() > 0 then
+        groupSize = GetNumRaidMembers()
+    end
+
+    if groupSize == 0 then return end
+
+    for i = 1, groupSize do
+        local unit = GetNumRaidMembers() > 0 and "raid" .. i or "party" .. i
+
+        if UnitExists(unit) and UnitIsPlayer(unit) then
+            local guid = UnitGUID(unit)
+            if guid and guid ~= UnitGUID("player") then
+                local cached = self.gearScoreCache[guid]
+                if not cached or GetTime() - cached.timestamp > 300 then
+                    table.insert(self.inspectQueue, {guid = guid, unit = unit})
+                end
+            end
+        end
+    end
+
+    -- Process any new queue entries
+    if #self.inspectQueue > 0 then
+        self:ProcessInspectQueue()
+    end
 end
 
 -- Get unit from GUID
 function GearScoreModule:GetUnitFromGUID(guid)
     if UnitGUID("target") == guid then return "target" end
     if UnitGUID("player") == guid then return "player" end
+    if UnitGUID("mouseover") == guid then return "mouseover" end
 
     -- Check party members
     for i = 1, 4 do
         local unit = "party" .. i
-        if UnitGUID(unit) == guid then return unit end
+        if UnitExists(unit) and UnitGUID(unit) == guid then return unit end
     end
 
     -- Check raid members
     for i = 1, 40 do
         local unit = "raid" .. i
-        if UnitGUID(unit) == guid then return unit end
+        if UnitExists(unit) and UnitGUID(unit) == guid then return unit end
     end
 
     return nil
@@ -280,7 +394,7 @@ end
 
 -- Create main gear score display frame
 function GearScoreModule:CreateGearScoreFrame()
-    self.gearScoreFrame = FizzureUI:CreateStatusFrame("GearScoreFrame", "Gear Score", 150, 100)
+    self.gearScoreFrame = FizzureUI:CreateStatusFrame("GearScoreFrame", "Gear Score", 180, 120, true)
 
     -- Player gear score display
     self.gearScoreText = FizzureUI:CreateLabel(self.gearScoreFrame, "GS: 0", "GameFontNormalLarge")
@@ -290,48 +404,246 @@ function GearScoreModule:CreateGearScoreFrame()
     self.itemLevelText = FizzureUI:CreateLabel(self.gearScoreFrame, "Avg iLvl: 0", "GameFontNormal")
     self.itemLevelText:SetPoint("TOP", 0, -45)
 
+    -- Target gear score
+    self.targetGSText = FizzureUI:CreateLabel(self.gearScoreFrame, "Target: N/A", "GameFontNormalSmall")
+    self.targetGSText:SetPoint("TOP", 0, -65)
+
     -- Details button
-    local detailsBtn = FizzureUI:CreateButton(self.gearScoreFrame, "Details", 80, 20, function()
+    local detailsBtn = FizzureUI:CreateButton(self.gearScoreFrame, "Details", 60, 20, function()
         self:ShowGearScoreDetails()
-    end)
-    detailsBtn:SetPoint("BOTTOM", 0, 10)
+    end, true)
+    detailsBtn:SetPoint("BOTTOMLEFT", 5, 10)
+
+    -- Inspect button
+    local inspectBtn = FizzureUI:CreateButton(self.gearScoreFrame, "Inspect", 60, 20, function()
+        self:ToggleInspectFrame()
+    end, true)
+    inspectBtn:SetPoint("BOTTOMRIGHT", -5, 10)
 
     self.gearScoreFrame:Hide()
 end
 
--- Create minimap button
-function GearScoreModule:CreateMinimapButton()
-    local button = CreateFrame("Button", "GearScoreMinimapButton", Minimap)
-    button:SetSize(28, 28)
-    button:SetFrameStrata("MEDIUM")
-    button:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 0, -20)
+-- Create inspect frame for viewing other players' gear scores
+function GearScoreModule:CreateInspectFrame()
+    self.inspectFrame = FizzureUI:CreateWindow("GearScoreInspect", "Gear Score Inspect", 400, 500, nil, true)
 
-    button:SetNormalTexture("Interface\\Icons\\INV_Chest_Plate16")
-    button:SetPushedTexture("Interface\\Icons\\INV_Chest_Plate17")
-    button:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    -- Player selection
+    local playerLabel = FizzureUI:CreateLabel(self.inspectFrame.content, "Inspecting: None", "GameFontNormalLarge")
+    playerLabel:SetPoint("TOP", 0, -10)
+    self.inspectFrame.playerLabel = playerLabel
 
-    button:SetScript("OnClick", function(self, clickButton)
-        if clickButton == "LeftButton" then
-            GearScoreModule:ToggleGearScoreFrame()
-        elseif clickButton == "RightButton" then
-            GearScoreModule:ShowGearScoreDetails()
+    -- Gear score display
+    local gsLabel = FizzureUI:CreateLabel(self.inspectFrame.content, "Gear Score: 0", "GameFontNormal")
+    gsLabel:SetPoint("TOP", 0, -35)
+    self.inspectFrame.gsLabel = gsLabel
+
+    -- Item breakdown scroll
+    self.inspectScroll = FizzureUI:CreateScrollFrame(self.inspectFrame.content, 380, 380)
+    self.inspectScroll:SetPoint("TOP", 0, -60)
+
+    -- Target/Group buttons
+    local targetBtn = FizzureUI:CreateButton(self.inspectFrame.content, "Inspect Target", 100, 24, function()
+        self:InspectCurrentTarget()
+    end, true)
+    targetBtn:SetPoint("BOTTOMLEFT", 10, 10)
+
+    local groupBtn = FizzureUI:CreateButton(self.inspectFrame.content, "Group Scores", 100, 24, function()
+        self:ShowGroupGearScores()
+    end, true)
+    groupBtn:SetPoint("BOTTOM", 0, 10)
+
+    self.inspectFrame:Hide()
+end
+
+-- Toggle inspect frame
+function GearScoreModule:ToggleInspectFrame()
+    if self.inspectFrame:IsShown() then
+        self.inspectFrame:Hide()
+    else
+        self.inspectFrame:Show()
+        self:UpdateInspectFrameGroupList()
+    end
+end
+
+-- Inspect current target
+function GearScoreModule:InspectCurrentTarget()
+    if not UnitExists("target") or not UnitIsPlayer("target") then
+        self.Fizzure:ShowNotification("No Target", "Target a player to inspect their gear score", "warning", 3)
+        return
+    end
+
+    local guid = UnitGUID("target")
+    local name = UnitName("target")
+
+    self.inspectFrame.currentGUID = guid
+    self.inspectFrame.playerLabel:SetText("Inspecting: " .. name)
+
+    -- Check cache first
+    local cached = self.gearScoreCache[guid]
+    if cached and GetTime() - cached.timestamp < 60 then
+        self:UpdateInspectFrame(guid)
+    else
+        self.inspectFrame.gsLabel:SetText("Gear Score: Inspecting...")
+        NotifyInspect("target")
+    end
+end
+
+-- Update inspect frame with player data
+function GearScoreModule:UpdateInspectFrame(guid)
+    local cached = self.gearScoreCache[guid]
+    if not cached then return end
+
+    self.inspectFrame.gsLabel:SetText("Gear Score: " .. self:FormatGearScore(cached.score))
+
+    -- Update item breakdown
+    local content = self.inspectScroll.content
+
+    -- Clear existing items
+    for i = 1, content:GetNumChildren() do
+        local child = select(i, content:GetChildren())
+        if child then
+            child:Hide()
         end
-    end)
+    end
 
-    button:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:SetText("Gear Score", 1, 1, 1)
-        GameTooltip:AddLine("Your GS: " .. (GearScoreModule.playerGearScore or 0), 0.7, 0.7, 0.7)
-        GameTooltip:AddLine("Left-click: Toggle display", 0.5, 0.5, 0.5)
-        GameTooltip:AddLine("Right-click: Show details", 0.5, 0.5, 0.5)
-        GameTooltip:Show()
-    end)
+    local yOffset = -10
 
-    button:SetScript("OnLeave", function(self)
-        GameTooltip:Hide()
-    end)
+    -- Sort slots by score
+    local sortedSlots = {}
+    for slot, data in pairs(cached.breakdown or {}) do
+        table.insert(sortedSlots, {slot = slot, data = data})
+    end
+    table.sort(sortedSlots, function(a, b) return a.data.score > b.data.score end)
 
-    self.minimapButton = button
+    for _, entry in ipairs(sortedSlots) do
+        local slot = entry.slot
+        local data = entry.data
+
+        -- Create item frame
+        local itemFrame = CreateFrame("Frame", nil, content)
+        itemFrame:SetSize(360, 25)
+        itemFrame:SetPoint("TOPLEFT", 10, yOffset)
+
+        -- Item icon
+        local icon = itemFrame:CreateTexture(nil, "ARTWORK")
+        icon:SetSize(20, 20)
+        icon:SetPoint("LEFT", 0, 0)
+
+        local _, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(data.link)
+        if itemIcon then
+            icon:SetTexture(itemIcon)
+        end
+
+        -- Slot name
+        local slotName = itemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        slotName:SetPoint("LEFT", icon, "RIGHT", 5, 0)
+        slotName:SetText(self:GetSlotDisplayName(slot))
+        slotName:SetTextColor(0.8, 0.8, 0.8)
+
+        -- Item link
+        local linkText = itemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        linkText:SetPoint("LEFT", slotName, "RIGHT", 10, 0)
+        linkText:SetSize(180, 20)
+        linkText:SetText(data.link)
+        linkText:SetJustifyH("LEFT")
+
+        -- Score
+        local scoreText = itemFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        scoreText:SetPoint("RIGHT", -5, 0)
+        scoreText:SetText(math.floor(data.score))
+        local r, g, b = self:GetGearScoreColor(data.score)
+        scoreText:SetTextColor(r, g, b)
+
+        yOffset = yOffset - 27
+    end
+
+    -- Update scroll height
+    self.inspectScroll.content:SetHeight(math.abs(yOffset) + 20)
+end
+
+-- Show group gear scores
+function GearScoreModule:ShowGroupGearScores()
+    local content = self.inspectScroll.content
+
+    -- Clear existing items
+    for i = 1, content:GetNumChildren() do
+        local child = select(i, content:GetChildren())
+        if child then
+            child:Hide()
+        end
+    end
+
+    local yOffset = -10
+    self.inspectFrame.playerLabel:SetText("Group Gear Scores")
+    self.inspectFrame.gsLabel:SetText("")
+
+    -- Add player first
+    local playerFrame = CreateFrame("Button", nil, content)
+    playerFrame:SetSize(360, 25)
+    playerFrame:SetPoint("TOPLEFT", 10, yOffset)
+
+    local playerName = playerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    playerName:SetPoint("LEFT", 5, 0)
+    playerName:SetText(UnitName("player") .. " (You)")
+    playerName:SetTextColor(0.2, 1, 0.2)
+
+    local playerGS = playerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    playerGS:SetPoint("RIGHT", -5, 0)
+    playerGS:SetText(self:FormatGearScore(self.playerGearScore or 0))
+
+    yOffset = yOffset - 30
+
+    -- Add group members
+    local groupSize = math.max(GetNumPartyMembers(), GetNumRaidMembers())
+
+    for i = 1, groupSize do
+        local unit = GetNumRaidMembers() > 0 and "raid" .. i or "party" .. i
+
+        if UnitExists(unit) then
+            local guid = UnitGUID(unit)
+            local name = UnitName(unit)
+            local cached = self.gearScoreCache[guid]
+
+            local memberFrame = CreateFrame("Button", nil, content)
+            memberFrame:SetSize(360, 25)
+            memberFrame:SetPoint("TOPLEFT", 10, yOffset)
+
+            -- Make it clickable to inspect
+            memberFrame:SetScript("OnClick", function()
+                if cached then
+                    self.inspectFrame.currentGUID = guid
+                    self:UpdateInspectFrame(guid)
+                end
+            end)
+
+            local memberName = memberFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            memberName:SetPoint("LEFT", 5, 0)
+            memberName:SetText(name)
+            memberName:SetTextColor(0.9, 0.9, 0.9)
+
+            local memberGS = memberFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            memberGS:SetPoint("RIGHT", -5, 0)
+
+            if cached then
+                memberGS:SetText(self:FormatGearScore(cached.score))
+            else
+                memberGS:SetText("Unknown")
+                memberGS:SetTextColor(0.7, 0.7, 0.7)
+            end
+
+            yOffset = yOffset - 27
+        end
+    end
+
+    -- Update scroll height
+    self.inspectScroll.content:SetHeight(math.abs(yOffset) + 20)
+end
+
+-- Update group list in inspect frame
+function GearScoreModule:UpdateInspectFrameGroupList()
+    if self.inspectFrame:IsShown() and not self.inspectFrame.currentGUID then
+        self:ShowGroupGearScores()
+    end
 end
 
 -- Toggle gear score frame
@@ -368,9 +680,22 @@ function GearScoreModule:UpdateGearScoreFrame()
     end
 
     self.itemLevelText:SetText("Avg iLvl: " .. avgItemLevel)
+
+    -- Update target gear score
+    if UnitExists("target") and UnitIsPlayer("target") then
+        local guid = UnitGUID("target")
+        local cached = self.gearScoreCache[guid]
+        if cached then
+            self.targetGSText:SetText("Target: " .. self:FormatGearScore(cached.score))
+        else
+            self.targetGSText:SetText("Target: Inspecting...")
+        end
+    else
+        self.targetGSText:SetText("Target: N/A")
+    end
 end
 
--- Show detailed gear score breakdown
+-- Show detailed gear score breakdown (existing function - kept the same)
 function GearScoreModule:ShowGearScoreDetails()
     if self.detailsFrame then
         if self.detailsFrame:IsShown() then
@@ -386,9 +711,9 @@ function GearScoreModule:ShowGearScoreDetails()
     self:UpdateDetailsFrame()
 end
 
--- Create detailed breakdown frame
+-- Create detailed breakdown frame (existing function - kept the same)
 function GearScoreModule:CreateDetailsFrame()
-    self.detailsFrame = FizzureUI:CreateWindow("GearScoreDetails", "Gear Score Breakdown", 400, 500)
+    self.detailsFrame = FizzureUI:CreateWindow("GearScoreDetails", "Gear Score Breakdown", 400, 500, nil, true)
 
     -- Scroll frame for item list
     self.detailsScroll = FizzureUI:CreateScrollFrame(self.detailsFrame.content, 380, 420)
@@ -399,7 +724,7 @@ function GearScoreModule:CreateDetailsFrame()
     self.totalLabel:SetPoint("BOTTOM", 0, 15)
 end
 
--- Update details frame with current gear
+-- Update details frame with current gear (existing function - kept the same)
 function GearScoreModule:UpdateDetailsFrame()
     if not self.detailsFrame or not self.detailsScroll then return end
 
@@ -561,6 +886,27 @@ function GearScoreModule:HookTooltips()
             end
         end
     end
+
+    -- Hook unit tooltip to show gear scores
+    self.originalUnitTooltip = GameTooltip.SetUnit
+    GameTooltip.SetUnit = function(tooltip, unit)
+        self.originalUnitTooltip(tooltip, unit)
+
+        if UnitIsPlayer(unit) and unit ~= "player" then
+            local guid = UnitGUID(unit)
+            if guid then
+                local cached = self.gearScoreCache[guid]
+                if cached then
+                    tooltip:AddLine("Gear Score: " .. self:FormatGearScore(cached.score))
+                elseif self.settings.showOtherPlayers then
+                    tooltip:AddLine("Gear Score: Inspecting...")
+                    -- Queue for inspection
+                    table.insert(self.inspectQueue, {guid = guid, unit = unit})
+                    self:ProcessInspectQueue()
+                end
+            end
+        end
+    end
 end
 
 -- Unhook tooltips
@@ -570,6 +916,9 @@ function GearScoreModule:UnhookTooltips()
     end
     if self.originalBagTooltip then
         GameTooltip.SetBagItem = self.originalBagTooltip
+    end
+    if self.originalUnitTooltip then
+        GameTooltip.SetUnit = self.originalUnitTooltip
     end
 end
 
@@ -631,46 +980,41 @@ function GearScoreModule:CreateConfigUI(parent, x, y)
                 else
                     self:UnhookTooltips()
                 end
-            end)
+            end, true)
     showTooltipCheck:SetPoint("TOPLEFT", x, y)
 
     local showInspectCheck = FizzureUI:CreateCheckBox(parent, "Show gear score on inspect",
             self.settings.showInspect, function(checked)
                 self.settings.showInspect = checked
                 self.Fizzure:SetModuleSettings(self.name, self.settings)
-            end)
+            end, true)
     showInspectCheck:SetPoint("TOPLEFT", x, y - 25)
 
-    local showMinimapCheck = FizzureUI:CreateCheckBox(parent, "Show minimap button",
-            self.settings.showMinimapButton, function(checked)
-                self.settings.showMinimapButton = checked
+    local showGroupCheck = FizzureUI:CreateCheckBox(parent, "Show group member gear scores",
+            self.settings.showGroupMembers, function(checked)
+                self.settings.showGroupMembers = checked
                 self.Fizzure:SetModuleSettings(self.name, self.settings)
+            end, true)
+    showGroupCheck:SetPoint("TOPLEFT", x, y - 50)
 
-                if checked then
-                    if not self.minimapButton then
-                        self:CreateMinimapButton()
-                    else
-                        self.minimapButton:Show()
-                    end
-                else
-                    if self.minimapButton then
-                        self.minimapButton:Hide()
-                    end
-                end
-            end)
-    showMinimapCheck:SetPoint("TOPLEFT", x, y - 50)
+    local inspectTargetCheck = FizzureUI:CreateCheckBox(parent, "Auto-inspect target",
+            self.settings.inspectOnTarget, function(checked)
+                self.settings.inspectOnTarget = checked
+                self.Fizzure:SetModuleSettings(self.name, self.settings)
+            end, true)
+    inspectTargetCheck:SetPoint("TOPLEFT", x, y - 75)
 
     local showFrameBtn = FizzureUI:CreateButton(parent, "Show GS Frame", 100, 24, function()
         self:ToggleGearScoreFrame()
-    end)
-    showFrameBtn:SetPoint("TOPLEFT", x, y - 80)
+    end, true)
+    showFrameBtn:SetPoint("TOPLEFT", x, y - 105)
 
-    local detailsBtn = FizzureUI:CreateButton(parent, "Show Details", 100, 24, function()
-        self:ShowGearScoreDetails()
-    end)
-    detailsBtn:SetPoint("TOPLEFT", x + 110, y - 80)
+    local inspectBtn = FizzureUI:CreateButton(parent, "Inspect Window", 100, 24, function()
+        self:ToggleInspectFrame()
+    end, true)
+    inspectBtn:SetPoint("TOPLEFT", x + 110, y - 105)
 
-    return y - 110
+    return y - 135
 end
 
 -- Quick status for main interface

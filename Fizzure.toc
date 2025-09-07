@@ -22,6 +22,9 @@ modules\GearScore.lua
 modules\CharacterStats.lua
 modules\TalentTree.lua
 modules\FishingHelper.lua
+modules\CompanionBar.lua
+modules\MountBar.lua
+modules\TrinketManager.lua
 
 # Bindings
 Bindings.xml
