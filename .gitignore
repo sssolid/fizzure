@@ -1,0 +1,51 @@
+### JetBrains IDE ###
+.idea/
+*.iml
+out/
+cmake-build-*/
+
+# User-specific stuff
+*.iws
+libs/
+
+### OS junk ###
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.nfs*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+### Lua project ###
+# Bytecode
+*.luac
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+### World of Warcraft Addon specifics ###
+# Ignore saved variables and cache from WoW client
+*.bak.lua
+*.old.lua
+WTF/
+Cache/
+Logs/
+Errors/
+

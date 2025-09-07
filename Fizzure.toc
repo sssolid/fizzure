@@ -1,0 +1,27 @@
+## Interface: 30300
+## Title: Fizzure - Modular Framework
+## Notes: Comprehensive modular addon system for World of Warcraft 3.3.5 with enhanced UI modules
+## Author: Fizzure Team
+## Version: 3.2
+## SavedVariables: FizzureDB
+## SavedVariablesPerCharacter: FizzureDB
+## OptionalDeps:
+## DefaultState: enabled
+## LoadOnDemand: 0
+
+# Core System Files
+Common.lua
+UIFramework.lua
+SecureActions.lua
+Fizzure.lua
+
+# Module Files
+modules\Hunter.lua
+modules\GoldTracker.lua
+modules\GearScore.lua
+modules\CharacterStats.lua
+modules\TalentTree.lua
+modules\FishingHelper.lua
+
+# Bindings
+Bindings.xml
