@@ -988,5 +988,5 @@ end
 
 -- Register module
 if Fizzure then
-    Fizzure:RegisterClassModule("Hunter Pet Manager", HunterModule, "HUNTER")
+    Fizzure:RegisterModule("Hunter Pet Manager", HunterModule, "HUNTER")
 end

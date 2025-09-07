@@ -1,10 +1,11 @@
--- UIFramework.lua - Enhanced GUI system for Fizzure modules with flat design
+-- UIFramework.lua - Enhanced GUI system for Fizzure modules with FIXES for 3.3.5
 local UIFramework = {}
 _G.FizzureUI = UIFramework
 
 -- Frame pool for performance
 UIFramework.framePool = {}
 UIFramework.activeFrames = {}
+UIFramework.frameCounter = 1
 
 -- Flat design color scheme
 local FLAT_COLORS = {
@@ -18,9 +19,18 @@ local FLAT_COLORS = {
     text = {0.9, 0.9, 0.9, 1}
 }
 
--- Base frame creation
+-- FIXED: Get unique frame name function
+function UIFramework:GetUniqueFrameName(prefix)
+    local name = (prefix or "FizzureUIFrame") .. self.frameCounter
+    self.frameCounter = self.frameCounter + 1
+    return name
+end
+
+-- FIXED: Base frame creation with proper naming
 function UIFramework:CreateFrame(frameType, name, parent, template)
-    local frame = CreateFrame(frameType or "Frame", name, parent or UIParent, template)
+    -- FIXED: Always provide a name instead of nil
+    local frameName = name or self:GetUniqueFrameName("FizzureFrame")
+    local frame = CreateFrame(frameType or "Frame", frameName, parent or UIParent, template)
 
     -- Add common methods
     frame.Hide_ = frame.Hide
@@ -48,9 +58,10 @@ local function CreateFlatBackdrop(bgAlpha, borderAlpha)
     }
 end
 
--- Window creation with flat design option
+-- FIXED: Window creation with proper naming and flat design
 function UIFramework:CreateWindow(name, title, width, height, parent, flatDesign)
-    local frame = self:CreateFrame("Frame", name, parent)
+    local frameName = name or self:GetUniqueFrameName("FizzureWindow")
+    local frame = self:CreateFrame("Frame", frameName, parent)
     frame:SetSize(width or 400, height or 300)
     frame:SetPoint("CENTER")
 
@@ -81,7 +92,7 @@ function UIFramework:CreateWindow(name, title, width, height, parent, flatDesign
     frame:Hide()
 
     -- Title bar
-    local titleBar = self:CreateFrame("Frame", nil, frame)
+    local titleBar = self:CreateFrame("Frame", self:GetUniqueFrameName("TitleBar"), frame)
     titleBar:SetHeight(32)
     titleBar:SetPoint("TOPLEFT", flatDesign and 5 or 12, flatDesign and -5 or -12)
     titleBar:SetPoint("TOPRIGHT", flatDesign and -5 or -12, flatDesign and -5 or -12)
@@ -94,7 +105,7 @@ function UIFramework:CreateWindow(name, title, width, height, parent, flatDesign
     frame.titleBar = titleBar
 
     -- Close button
-    local closeBtn = CreateFrame("Button", nil, frame, flatDesign and nil or "UIPanelCloseButton")
+    local closeBtn = CreateFrame("Button", self:GetUniqueFrameName("CloseButton"), frame, flatDesign and nil or "UIPanelCloseButton")
     if flatDesign then
         closeBtn:SetSize(20, 20)
         closeBtn:SetPoint("TOPRIGHT", -8, -8)
@@ -102,10 +113,10 @@ function UIFramework:CreateWindow(name, title, width, height, parent, flatDesign
         closeBtn:SetBackdropColor(unpack(FLAT_COLORS.error))
         closeBtn:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
 
-        local text = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        text:SetAllPoints()
-        text:SetText("×")
-        text:SetTextColor(1, 1, 1, 1)
+        local closeText = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        closeText:SetAllPoints()
+        closeText:SetText("×")
+        closeText:SetTextColor(1, 1, 1, 1)
     else
         closeBtn:SetPoint("TOPRIGHT", -8, -8)
     end
@@ -115,7 +126,7 @@ function UIFramework:CreateWindow(name, title, width, height, parent, flatDesign
     frame.closeBtn = closeBtn
 
     -- Content area - properly positioned below title bar
-    local content = self:CreateFrame("Frame", nil, frame)
+    local content = self:CreateFrame("Frame", self:GetUniqueFrameName("Content"), frame)
     content:SetPoint("TOPLEFT", flatDesign and 5 or 12, flatDesign and -35 or -44)
     content:SetPoint("BOTTOMRIGHT", flatDesign and -5 or -12, flatDesign and 5 or 12)
     frame.content = content
@@ -123,9 +134,9 @@ function UIFramework:CreateWindow(name, title, width, height, parent, flatDesign
     return frame
 end
 
--- Panel creation with flat design option
+-- FIXED: Panel creation with proper naming and flat design
 function UIFramework:CreatePanel(parent, width, height, anchor, flatDesign)
-    local panel = self:CreateFrame("Frame", nil, parent)
+    local panel = self:CreateFrame("Frame", self:GetUniqueFrameName("Panel"), parent)
     panel:SetSize(width or 200, height or 100)
 
     if anchor then
@@ -155,56 +166,17 @@ function UIFramework:CreatePanel(parent, width, height, anchor, flatDesign)
     return panel
 end
 
--- Status frame with flat design option
-function UIFramework:CreateStatusFrame(name, title, width, height, flatDesign)
-    local frame = self:CreateFrame("Frame", name, UIParent)
-    frame:SetSize(width or 200, height or 140)
-    frame:SetPoint("TOPLEFT", 20, -100)
-
-    if flatDesign then
-        frame:SetBackdrop(CreateFlatBackdrop())
-        frame:SetBackdropColor(unpack(FLAT_COLORS.background))
-        frame:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
-    else
-        frame:SetBackdrop({
-            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true, tileSize = 16, edgeSize = 16,
-            insets = { left = 4, right = 4, top = 4, bottom = 4 }
-        })
-        frame:SetBackdropColor(0, 0, 0, 0.9)
-    end
-
-    frame:SetFrameStrata("MEDIUM")
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-    frame:SetClampedToScreen(true)
-
-    if title then
-        local titleText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        titleText:SetPoint("TOP", 0, -8)
-        titleText:SetText(title)
-        titleText:SetTextColor(unpack(FLAT_COLORS.text))
-        frame.titleText = titleText
-    end
-
-    return frame
-end
-
--- Scroll frame with corrected sizing and positioning
+-- FIXED: Scroll frame with proper naming and sizing
 function UIFramework:CreateScrollFrame(parent, width, height, scrollBarWidth, name)
     scrollBarWidth = scrollBarWidth or 20
-    name = name or ((parent:GetName() or "FizzureParent") .. "_Scroll")
+    local frameName = name or self:GetUniqueFrameName("ScrollFrame")
 
-    local scrollFrame = CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
+    local scrollFrame = CreateFrame("ScrollFrame", frameName, parent, "UIPanelScrollFrameTemplate")
     scrollFrame:SetSize(width, height)
     scrollFrame:SetPoint("TOPLEFT")
 
     -- Create scroll child with proper width calculation
-    local scrollChild = CreateFrame("Frame", name .. "Child", scrollFrame)
+    local scrollChild = CreateFrame("Frame", frameName .. "Child", scrollFrame)
     scrollChild:SetSize(width - scrollBarWidth, 1)
     scrollFrame:SetScrollChild(scrollChild)
 
@@ -234,12 +206,13 @@ function UIFramework:CreateScrollFrame(parent, width, height, scrollBarWidth, na
     return scrollFrame
 end
 
--- Button creation with flat design option
-function UIFramework:CreateButton(parent, text, width, height, onClick, flatDesign)
+-- FIXED: Button creation with proper text handling and naming
+function UIFramework:CreateButton(parent, buttonText, width, height, onClick, flatDesign)
+    local buttonName = self:GetUniqueFrameName("Button")
     local button
 
     if flatDesign then
-        button = CreateFrame("Button", nil, parent)
+        button = CreateFrame("Button", buttonName, parent)
         button:SetSize(width or 80, height or 22)
 
         -- Flat design styling
@@ -247,12 +220,12 @@ function UIFramework:CreateButton(parent, text, width, height, onClick, flatDesi
         button:SetBackdropColor(unpack(FLAT_COLORS.accent))
         button:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
 
-        -- Text
-        local text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        text:SetAllPoints()
-        text:SetText(text or "")
-        text:SetTextColor(1, 1, 1, 1)
-        button.text = text
+        -- FIXED: Text handling - avoid variable name collision
+        local textString = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        textString:SetAllPoints()
+        textString:SetText(buttonText or "Button")
+        textString:SetTextColor(1, 1, 1, 1)
+        button.textString = textString
 
         -- Hover effect
         button:SetScript("OnEnter", function(self)
@@ -262,16 +235,20 @@ function UIFramework:CreateButton(parent, text, width, height, onClick, flatDesi
             self:SetBackdropColor(unpack(FLAT_COLORS.accent))
         end)
 
-        -- Set text method
+        -- FIXED: SetText method
         function button:SetText(newText)
-            self.text:SetText(newText)
+            self.textString:SetText(newText or "")
+        end
+
+        function button:GetText()
+            return self.textString:GetText()
         end
     else
-        button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+        button = CreateFrame("Button", buttonName, parent, "UIPanelButtonTemplate")
         button:SetSize(width or 80, height or 22)
-        button:SetText(text or "")
+        button:SetText(buttonText or "Button")
 
-        -- Fix text positioning
+        -- Fix text positioning for standard buttons
         local fontString = button:GetFontString()
         if fontString then
             fontString:SetPoint("CENTER", 0, 0)
@@ -285,14 +262,14 @@ function UIFramework:CreateButton(parent, text, width, height, onClick, flatDesi
     return button
 end
 
--- Checkbox with label and flat design
-function UIFramework:CreateCheckBox(parent, text, checked, onChange, flatDesign)
-    local container = self:CreateFrame("Frame", nil, parent)
+-- FIXED: Checkbox with proper naming and flat design
+function UIFramework:CreateCheckBox(parent, labelText, checked, onChange, flatDesign)
+    local container = self:CreateFrame("Frame", self:GetUniqueFrameName("CheckContainer"), parent)
     container:SetSize(200, 20)
 
     local checkBox
     if flatDesign then
-        checkBox = CreateFrame("Button", nil, container)
+        checkBox = CreateFrame("Button", self:GetUniqueFrameName("CheckBox"), container)
         checkBox:SetSize(16, 16)
         checkBox:SetPoint("LEFT")
 
@@ -327,50 +304,51 @@ function UIFramework:CreateCheckBox(parent, text, checked, onChange, flatDesign)
 
         checkBox:SetChecked(checked)
     else
-        checkBox = CreateFrame("CheckButton", nil, container, "UICheckButtonTemplate")
+        checkBox = CreateFrame("CheckButton", self:GetUniqueFrameName("CheckButton"), container, "UICheckButtonTemplate")
         checkBox:SetPoint("LEFT")
         checkBox:SetSize(20, 20)
         checkBox:SetChecked(checked or false)
+
+        if onChange then
+            checkBox:SetScript("OnClick", function()
+                onChange(checkBox:GetChecked())
+            end)
+        end
     end
 
     local label = container:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     label:SetPoint("LEFT", checkBox, "RIGHT", 5, 0)
-    label:SetText(text or "")
+    label:SetText(labelText or "")
     label:SetTextColor(unpack(FLAT_COLORS.text))
 
     container.checkBox = checkBox
     container.label = label
 
-    container.SetChecked = function(self, value)
+    -- Container methods
+    function container:SetChecked(value)
         self.checkBox:SetChecked(value)
     end
 
-    container.GetChecked = function(self)
+    function container:GetChecked()
         return self.checkBox:GetChecked()
     end
 
-    container.SetText = function(self, text)
+    function container:SetText(text)
         self.label:SetText(text)
         self:SetWidth(self.label:GetStringWidth() + 30)
     end
 
-    if not flatDesign and onChange then
-        checkBox:SetScript("OnClick", function()
-            onChange(checkBox:GetChecked())
-        end)
-    end
-
     container:SetWidth(label:GetStringWidth() + 30)
-
     return container
 end
 
--- Edit box with flat design option
+-- FIXED: Edit box with proper naming and flat design
 function UIFramework:CreateEditBox(parent, width, height, onEnter, onTextChanged, flatDesign)
+    local editBoxName = self:GetUniqueFrameName("EditBox")
     local editBox
 
     if flatDesign then
-        editBox = CreateFrame("EditBox", nil, parent)
+        editBox = CreateFrame("EditBox", editBoxName, parent)
         editBox:SetSize(width or 100, height or 20)
         editBox:SetAutoFocus(false)
 
@@ -382,7 +360,7 @@ function UIFramework:CreateEditBox(parent, width, height, onEnter, onTextChanged
         editBox:SetTextColor(unpack(FLAT_COLORS.text))
         editBox:SetTextInsets(5, 5, 0, 0)
     else
-        editBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+        editBox = CreateFrame("EditBox", editBoxName, parent, "InputBoxTemplate")
         editBox:SetSize(width or 100, height or 20)
         editBox:SetAutoFocus(false)
     end
@@ -405,9 +383,75 @@ function UIFramework:CreateEditBox(parent, width, height, onEnter, onTextChanged
     return editBox
 end
 
--- Status bar with flat design option
+-- FIXED: Slider with proper naming and flat design
+function UIFramework:CreateSlider(parent, sliderName, min, max, value, step, onChange, flatDesign)
+    local slider
+
+    if flatDesign then
+        slider = CreateFrame("Slider", self:GetUniqueFrameName("Slider"), parent)
+        slider:SetSize(200, 20)
+        slider:SetMinMaxValues(min or 0, max or 100)
+        slider:SetValue(value or min or 0)
+        slider:SetValueStep(step or 1)
+
+        -- Track
+        local track = slider:CreateTexture(nil, "BACKGROUND")
+        track:SetHeight(4)
+        track:SetPoint("LEFT", 10, 0)
+        track:SetPoint("RIGHT", -10, 0)
+        track:SetTexture("Interface\\Buttons\\WHITE8X8")
+        track:SetVertexColor(0.3, 0.3, 0.3, 1)
+
+        -- Thumb
+        local thumb = slider:CreateTexture(nil, "ARTWORK")
+        thumb:SetSize(16, 16)
+        thumb:SetTexture("Interface\\Buttons\\WHITE8X8")
+        thumb:SetVertexColor(unpack(FLAT_COLORS.accent))
+        slider:SetThumbTexture(thumb)
+
+        -- Labels
+        if sliderName then
+            local nameLabel = slider:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+            nameLabel:SetPoint("BOTTOM", slider, "TOP", 0, 5)
+            nameLabel:SetText(sliderName)
+            nameLabel:SetTextColor(unpack(FLAT_COLORS.text))
+        end
+
+        local lowLabel = slider:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+        lowLabel:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 0, -5)
+        lowLabel:SetText(tostring(min or 0))
+        lowLabel:SetTextColor(unpack(FLAT_COLORS.text))
+
+        local highLabel = slider:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+        highLabel:SetPoint("TOPRIGHT", slider, "BOTTOMRIGHT", 0, -5)
+        highLabel:SetText(tostring(max or 100))
+        highLabel:SetTextColor(unpack(FLAT_COLORS.text))
+    else
+        slider = CreateFrame("Slider", self:GetUniqueFrameName("Slider"), parent, "OptionsSliderTemplate")
+        slider:SetMinMaxValues(min or 0, max or 100)
+        slider:SetValue(value or min or 0)
+        slider:SetValueStep(step or 1)
+        slider:SetWidth(200)
+        slider:SetHeight(20)
+
+        if sliderName then
+            _G[slider:GetName() .. "Text"]:SetText(sliderName)
+        end
+
+        _G[slider:GetName() .. "Low"]:SetText(tostring(min or 0))
+        _G[slider:GetName() .. "High"]:SetText(tostring(max or 100))
+    end
+
+    if onChange then
+        slider:SetScript("OnValueChanged", onChange)
+    end
+
+    return slider
+end
+
+-- FIXED: Status bar with proper naming
 function UIFramework:CreateStatusBar(parent, width, height, min, max, value, flatDesign)
-    local bar = CreateFrame("StatusBar", nil, parent)
+    local bar = CreateFrame("StatusBar", self:GetUniqueFrameName("StatusBar"), parent)
     bar:SetSize(width or 100, height or 20)
     bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     bar:SetMinMaxValues(min or 0, max or 100)
@@ -434,21 +478,21 @@ function UIFramework:CreateStatusBar(parent, width, height, min, max, value, fla
     end
 
     -- Text overlay
-    local text = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    text:SetPoint("CENTER", 0, 0)
-    text:SetTextColor(unpack(FLAT_COLORS.text))
-    bar.text = text
+    local textOverlay = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    textOverlay:SetPoint("CENTER", 0, 0)
+    textOverlay:SetTextColor(unpack(FLAT_COLORS.text))
+    bar.textOverlay = textOverlay
 
     function bar:SetText(str)
-        self.text:SetText(str)
+        self.textOverlay:SetText(str)
     end
 
     return bar
 end
 
--- Generic item slot for modules to use
+-- FIXED: Generic item slot with proper naming
 function UIFramework:CreateItemSlot(parent, index, onRightClick, onDrop, tooltip, flatDesign)
-    local slot = CreateFrame("Button", nil, parent)
+    local slot = CreateFrame("Button", self:GetUniqueFrameName("ItemSlot"), parent)
     slot:SetSize(40, 40)
 
     if flatDesign then
@@ -574,7 +618,7 @@ end
 
 -- Dropdown menu (unchanged - works well)
 function UIFramework:CreateDropdown(parent, width, items, onSelect)
-    local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
+    local dropdown = CreateFrame("Frame", self:GetUniqueFrameName("Dropdown"), parent, "UIDropDownMenuTemplate")
     UIDropDownMenu_SetWidth(dropdown, width or 120)
 
     UIDropDownMenu_Initialize(dropdown, function(self, level)
@@ -595,75 +639,170 @@ function UIFramework:CreateDropdown(parent, width, items, onSelect)
     return dropdown
 end
 
--- Slider with flat design option
-function UIFramework:CreateSlider(parent, name, min, max, value, step, onChange, flatDesign)
-    local slider
+-- FIXED: Status frame with proper naming
+function UIFramework:CreateStatusFrame(name, title, width, height, flatDesign)
+    local frameName = name or self:GetUniqueFrameName("StatusFrame")
+    local frame = self:CreateFrame("Frame", frameName, UIParent)
+    frame:SetSize(width or 200, height or 140)
+    frame:SetPoint("TOPLEFT", 20, -100)
 
     if flatDesign then
-        slider = CreateFrame("Slider", nil, parent)
-        slider:SetSize(200, 20)
-        slider:SetMinMaxValues(min or 0, max or 100)
-        slider:SetValue(value or min or 0)
-        slider:SetValueStep(step or 1)
-
-        -- Track
-        local track = slider:CreateTexture(nil, "BACKGROUND")
-        track:SetHeight(4)
-        track:SetPoint("LEFT", 10, 0)
-        track:SetPoint("RIGHT", -10, 0)
-        track:SetTexture("Interface\\Buttons\\WHITE8X8")
-        track:SetVertexColor(0.3, 0.3, 0.3, 1)
-
-        -- Thumb
-        local thumb = slider:CreateTexture(nil, "ARTWORK")
-        thumb:SetSize(16, 16)
-        thumb:SetTexture("Interface\\Buttons\\WHITE8X8")
-        thumb:SetVertexColor(unpack(FLAT_COLORS.accent))
-        slider:SetThumbTexture(thumb)
-
-        -- Labels
-        if name then
-            local nameLabel = slider:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-            nameLabel:SetPoint("BOTTOM", slider, "TOP", 0, 5)
-            nameLabel:SetText(name)
-            nameLabel:SetTextColor(unpack(FLAT_COLORS.text))
-        end
-
-        local lowLabel = slider:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-        lowLabel:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 0, -5)
-        lowLabel:SetText(tostring(min or 0))
-        lowLabel:SetTextColor(unpack(FLAT_COLORS.text))
-
-        local highLabel = slider:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-        highLabel:SetPoint("TOPRIGHT", slider, "BOTTOMRIGHT", 0, -5)
-        highLabel:SetText(tostring(max or 100))
-        highLabel:SetTextColor(unpack(FLAT_COLORS.text))
+        frame:SetBackdrop(CreateFlatBackdrop())
+        frame:SetBackdropColor(unpack(FLAT_COLORS.background))
+        frame:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
     else
-        slider = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
-        slider:SetMinMaxValues(min or 0, max or 100)
-        slider:SetValue(value or min or 0)
-        slider:SetValueStep(step or 1)
-        slider:SetWidth(200)
-        slider:SetHeight(20)
+        frame:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 16,
+            insets = { left = 4, right = 4, top = 4, bottom = 4 }
+        })
+        frame:SetBackdropColor(0, 0, 0, 0.9)
+    end
 
-        if name then
-            _G[slider:GetName() .. "Text"]:SetText(name)
+    frame:SetFrameStrata("MEDIUM")
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:SetClampedToScreen(true)
+
+    if title then
+        local titleText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        titleText:SetPoint("TOP", 0, -8)
+        titleText:SetText(title)
+        titleText:SetTextColor(unpack(FLAT_COLORS.text))
+        frame.titleText = titleText
+    end
+
+    return frame
+end
+
+-- Text label with flat design colors
+function UIFramework:CreateLabel(parent, labelText, fontSize)
+    local fontString = parent:CreateFontString(nil, "ARTWORK", fontSize or "GameFontNormal")
+    fontString:SetText(labelText or "")
+    fontString:SetTextColor(unpack(FLAT_COLORS.text))
+    return fontString
+end
+
+-- Separator line with flat design
+function UIFramework:CreateSeparator(parent, width)
+    local line = parent:CreateTexture(nil, "ARTWORK")
+    line:SetSize(width or parent:GetWidth() - 20, 1)
+    line:SetTexture("Interface\\Buttons\\WHITE8X8")
+    line:SetVertexColor(unpack(FLAT_COLORS.border))
+    return line
+end
+
+-- FIXED: Notification toast with proper naming
+function UIFramework:ShowToast(toastText, duration, toastType)
+    duration = duration or 3
+
+    local toast = self:CreateFrame("Frame", self:GetUniqueFrameName("Toast"), UIParent)
+    toast:SetSize(300, 60)
+    toast:SetPoint("TOP", 0, -100)
+
+    toast:SetBackdrop(CreateFlatBackdrop())
+
+    local colors = {
+        success = FLAT_COLORS.success,
+        error = FLAT_COLORS.error,
+        warning = FLAT_COLORS.warning,
+        info = FLAT_COLORS.accent
+    }
+
+    local color = colors[toastType] or colors.info
+    toast:SetBackdropColor(color[1], color[2], color[3], 0.9)
+    toast:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
+
+    local message = toast:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    message:SetPoint("CENTER")
+    message:SetText(toastText)
+    message:SetTextColor(1, 1, 1, 1)
+
+    -- Fade in
+    toast:SetAlpha(0)
+    toast:Show()
+
+    local fadeIn = toast:CreateAnimationGroup()
+    local alpha1 = fadeIn:CreateAnimation("Alpha")
+    alpha1:SetChange(1)
+    alpha1:SetDuration(0.2)
+    fadeIn:Play()
+
+    -- Auto hide
+    FizzureCommon:After(duration, function()
+        local fadeOut = toast:CreateAnimationGroup()
+        local alpha2 = fadeOut:CreateAnimation("Alpha")
+        alpha2:SetChange(-1)
+        alpha2:SetDuration(0.5)
+        fadeOut:Play()
+
+        fadeOut:SetScript("OnFinished", function()
+            toast:Hide()
+        end)
+    end)
+
+    return toast
+end
+
+-- FIXED: Context menu with proper naming
+function UIFramework:CreateContextMenu(parent, items, flatDesign)
+    local menu = self:CreateFrame("Frame", self:GetUniqueFrameName("ContextMenu"), parent)
+
+    if flatDesign then
+        menu:SetBackdrop(CreateFlatBackdrop())
+        menu:SetBackdropColor(unpack(FLAT_COLORS.background))
+        menu:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
+    else
+        menu:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 16,
+            insets = { left = 4, right = 4, top = 4, bottom = 4 }
+        })
+        menu:SetBackdropColor(0, 0, 0, 0.9)
+    end
+
+    menu:SetFrameStrata("DIALOG")
+    menu:Hide()
+
+    local height = 10
+    local maxWidth = 100
+
+    for i, item in ipairs(items) do
+        local menuButton = self:CreateButton(menu, item.text, 0, 20, item.func, flatDesign)
+        menuButton:SetPoint("TOPLEFT", 5, -height)
+        menuButton:SetPoint("RIGHT", -5, 0)
+
+        local textWidth = menuButton:GetText() and string.len(menuButton:GetText()) * 8 + 20 or 100
+        if textWidth > maxWidth then
+            maxWidth = textWidth
         end
 
-        _G[slider:GetName() .. "Low"]:SetText(tostring(min or 0))
-        _G[slider:GetName() .. "High"]:SetText(tostring(max or 100))
+        height = height + 22
     end
 
-    if onChange then
-        slider:SetScript("OnValueChanged", onChange)
-    end
+    menu:SetSize(maxWidth + 10, height)
 
-    return slider
+    -- Auto-hide on click outside
+    menu:SetScript("OnShow", function(self)
+        self:SetScript("OnUpdate", function(self)
+            if not MouseIsOver(self) then
+                self:Hide()
+                self:SetScript("OnUpdate", nil)
+            end
+        end)
+    end)
+
+    return menu
 end
 
 -- Tab system with flat design option
 function UIFramework:CreateTabPanel(parent, tabs, flatDesign)
-    local tabPanel = self:CreateFrame("Frame", nil, parent)
+    local tabPanel = self:CreateFrame("Frame", self:GetUniqueFrameName("TabPanel"), parent)
     tabPanel:SetAllPoints()
 
     tabPanel.tabs = {}
@@ -679,7 +818,7 @@ function UIFramework:CreateTabPanel(parent, tabs, flatDesign)
         tab:SetPoint("TOPLEFT", (i - 1) * tabWidth, 0)
 
         -- Tab content
-        local content = self:CreateFrame("Frame", nil, tabPanel)
+        local content = self:CreateFrame("Frame", self:GetUniqueFrameName("TabContent"), tabPanel)
         content:SetPoint("TOPLEFT", 0, -tabHeight - 5)
         content:SetPoint("BOTTOMRIGHT")
         content:Hide()
@@ -721,125 +860,4 @@ function UIFramework:CreateTabPanel(parent, tabs, flatDesign)
     return tabPanel
 end
 
--- Text label with flat design colors
-function UIFramework:CreateLabel(parent, text, fontSize)
-    local fontString = parent:CreateFontString(nil, "ARTWORK", fontSize or "GameFontNormal")
-    fontString:SetText(text or "")
-    fontString:SetTextColor(unpack(FLAT_COLORS.text))
-    return fontString
-end
-
--- Separator line with flat design
-function UIFramework:CreateSeparator(parent, width)
-    local line = parent:CreateTexture(nil, "ARTWORK")
-    line:SetSize(width or parent:GetWidth() - 20, 1)
-    line:SetTexture("Interface\\Buttons\\WHITE8X8")
-    line:SetVertexColor(unpack(FLAT_COLORS.border))
-    return line
-end
-
--- Notification toast with flat design
-function UIFramework:ShowToast(text, duration, type)
-    duration = duration or 3
-
-    local toast = self:CreateFrame("Frame", nil, UIParent)
-    toast:SetSize(300, 60)
-    toast:SetPoint("TOP", 0, -100)
-
-    toast:SetBackdrop(CreateFlatBackdrop())
-
-    local colors = {
-        success = FLAT_COLORS.success,
-        error = FLAT_COLORS.error,
-        warning = FLAT_COLORS.warning,
-        info = FLAT_COLORS.accent
-    }
-
-    local color = colors[type] or colors.info
-    toast:SetBackdropColor(color[1], color[2], color[3], 0.9)
-    toast:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
-
-    local message = toast:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-    message:SetPoint("CENTER")
-    message:SetText(text)
-    message:SetTextColor(1, 1, 1, 1)
-
-    -- Fade in
-    toast:SetAlpha(0)
-    toast:Show()
-
-    local fadeIn = toast:CreateAnimationGroup()
-    local alpha1 = fadeIn:CreateAnimation("Alpha")
-    alpha1:SetChange(1)
-    alpha1:SetDuration(0.2)
-    fadeIn:Play()
-
-    -- Auto hide
-    FizzureCommon:After(duration, function()
-        local fadeOut = toast:CreateAnimationGroup()
-        local alpha2 = fadeOut:CreateAnimation("Alpha")
-        alpha2:SetChange(-1)
-        alpha2:SetDuration(0.5)
-        fadeOut:Play()
-
-        fadeOut:SetScript("OnFinished", function()
-            toast:Hide()
-        end)
-    end)
-
-    return toast
-end
-
--- Context menu with flat design
-function UIFramework:CreateContextMenu(parent, items, flatDesign)
-    local menu = self:CreateFrame("Frame", nil, parent)
-
-    if flatDesign then
-        menu:SetBackdrop(CreateFlatBackdrop())
-        menu:SetBackdropColor(unpack(FLAT_COLORS.background))
-        menu:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
-    else
-        menu:SetBackdrop({
-            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true, tileSize = 16, edgeSize = 16,
-            insets = { left = 4, right = 4, top = 4, bottom = 4 }
-        })
-        menu:SetBackdropColor(0, 0, 0, 0.9)
-    end
-
-    menu:SetFrameStrata("DIALOG")
-    menu:Hide()
-
-    local height = 10
-    local maxWidth = 100
-
-    for i, item in ipairs(items) do
-        local button = self:CreateButton(menu, item.text, 0, 20, item.func, flatDesign)
-        button:SetPoint("TOPLEFT", 5, -height)
-        button:SetPoint("RIGHT", -5, 0)
-
-        local textWidth = button:GetFontString():GetStringWidth() + 20
-        if textWidth > maxWidth then
-            maxWidth = textWidth
-        end
-
-        height = height + 22
-    end
-
-    menu:SetSize(maxWidth + 10, height)
-
-    -- Auto-hide on click outside
-    menu:SetScript("OnShow", function(self)
-        self:SetScript("OnUpdate", function(self)
-            if not MouseIsOver(self) then
-                self:Hide()
-                self:SetScript("OnUpdate", nil)
-            end
-        end)
-    end)
-
-    return menu
-end
-
-print("|cff00ff00Fizzure|r UI Framework loaded with flat design support")
+print("|cff00ff00Fizzure|r UI Framework loaded with FIXES for WoW 3.3.5")
