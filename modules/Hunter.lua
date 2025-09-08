@@ -56,7 +56,7 @@ function HunterModule:Initialize()
     self.settings = self.Fizzure:GetModuleSettings(self.name)
     self:EnsureSettings()
 
-    self.debugAPI = self.Fizzure:GetDebugAPI()
+    -- self.debugAPI = self.Fizzure:GetDebugAPI()
 
     -- Initialize tracking variables
     self.currentPet = nil
@@ -395,36 +395,47 @@ end
 
 function HunterModule:FeedPet()
     if not self.currentPet then return end
+    if InCombatLockdown and InCombatLockdown() then return end  -- protected actions in combat
 
     local profile = self.settings.petProfiles[self.currentPet.name]
     if not profile or not profile.preferredFoods then return end
 
-    -- Find first available food
+    -- iterate preferred foods in order
     for i = 1, 6 do
         local foodName = profile.preferredFoods[i]
         if foodName and foodName ~= "" then
             local count = FizzureCommon:GetItemCount(foodName)
-            if count > 0 then
-                CastSpellByName("Feed Pet")
-                UseItemByName(foodName)
+            if count and count > 0 then
+                local bag, slot = FindItemInBags(foodName)
+                if bag then
+                    -- Cast Feed Pet then use the item from its bag slot
+                    CastSpellByName("Feed Pet")
+                    UseContainerItem(bag, slot)
 
-                if self.settings.notifications.feeding then
-                    self.Fizzure:ShowNotification("Pet Fed",
+                    if self.settings.notifications and self.settings.notifications.feeding then
+                        self.Fizzure:ShowNotification(
+                            "Pet Fed",
                             self.currentPet.name .. " fed with " .. foodName,
-                            "success", 3)
-                end
+                            "success",
+                            3
+                        )
+                    end
 
-                profile.lastFed = GetTime()
-                self.Fizzure:SetModuleSettings(self.name, self.settings)
-                return
+                    profile.lastFed = GetTime()
+                    self.Fizzure:SetModuleSettings(self.name, self.settings)
+                    return
+                end
             end
         end
     end
 
-    if self.settings.notifications.noFood then
-        self.Fizzure:ShowNotification("No Food",
-                "No preferred food available for " .. self.currentPet.name,
-                "warning", 3)
+    if self.settings.notifications and self.settings.notifications.noFood then
+        self.Fizzure:ShowNotification(
+            "No Food",
+            "No preferred food available for " .. self.currentPet.name,
+            "warning",
+            3
+        )
     end
 end
 
@@ -564,7 +575,7 @@ function HunterModule:CreatePetProfileFrame()
                 -- Update count
                 local count = GetItemCount(itemName)
                 if count and count > 1 then
-                    self.countText:SetText(count)
+                    self.countText:SetText(tostring(count))
                     self.countText:Show()
                 else
                     self.countText:SetText("")
@@ -901,12 +912,15 @@ function HunterModule:ClearAllFoodSlots()
 end
 
 function HunterModule:ToggleProfileFrame()
+    if not self.profileFrame then
+        self:CreatePetProfileFrame()
+    end
     if self.profileFrame:IsShown() then
+        if not self.profileFrame then self:CreatePetProfileFrame() end
         self.profileFrame:Hide()
     else
-        -- Force rescan when opening
-        self:ScanAvailableFoods()
-        self:UpdatePetProfileFrame()
+        self:UpdatePetProfileFrame()   -- if your code expects a refresh
+        if not self.profileFrame then self:CreatePetProfileFrame() end
         self.profileFrame:Show()
     end
 end
@@ -921,8 +935,10 @@ function HunterModule:CreateConfigUI(parent, x, y)
                 self.Fizzure:SetModuleSettings(self.name, self.settings)
 
                 if checked then
+                    if not self.statusFrame then self:CreateStatusFrame() end
                     self.statusFrame:Show()
                 else
+                    if not self.statusFrame then self:CreateStatusFrame() end
                     self.statusFrame:Hide()
                 end
             end)
@@ -988,5 +1004,5 @@ end
 
 -- Register module
 if Fizzure then
-    Fizzure:RegisterModule("Hunter Pet Manager", HunterModule, "HUNTER")
+    Fizzure:RegisterModule("Hunter Pet Manager", HunterModule)
 end

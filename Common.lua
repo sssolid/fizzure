@@ -1,35 +1,40 @@
 -- Common.lua - Core utility functions for Fizzure framework
+-- Single shared instance
+_G.Common = _G.Common or {}
+local Common = _G.Common
+
 local Common = {}
 _G.FizzureCommon = Common
 
+-- Initialization (set up a C_Timer.After shim that delegates to Common:After)
 function Common:Initialize()
     self.initialized = true
-
-    -- Shim C_Timer for 3.3.5 compatibility
-    if not _G.C_Timer then _G.C_Timer = {} end
-    if type(_G.C_Timer.After) ~= "function" then
-        _G.C_Timer.After = function(delay, func)
-            return Common:After(delay, func)
-        end
-    end
 end
 
--- Timer Functions
+-- One-shot timer (Wrath-safe)
 function Common:After(delay, func)
-    if type(delay) ~= "number" or delay < 0 then return end
+    delay = tonumber(delay)
+    if not delay or delay < 0 then return end
     if type(func) ~= "function" then return end
 
     local f = CreateFrame("Frame", nil, UIParent)
     local elapsed = 0
     f:SetScript("OnUpdate", function(self, dt)
-        elapsed = elapsed + dt
+        elapsed = elapsed + (tonumber(dt) or 0)
         if elapsed >= delay then
             self:SetScript("OnUpdate", nil)
-            pcall(func)
             self:Hide()
+            pcall(func)
         end
     end)
+    f:Show()
     return f
+end
+
+-- Retail-style shim (only if missing)
+_G.C_Timer = _G.C_Timer or {}
+if type(_G.C_Timer.After) ~= "function" then
+    _G.C_Timer.After = function(d, fn) return Common:After(d, fn) end
 end
 
 function Common:NewTicker(interval, func, iterations)
@@ -204,6 +209,24 @@ function Common:GetSpellCooldown(spell)
 end
 
 -- Item Functions
+function FindItemInBags(itemName)
+    for bag = 0, 4 do
+        local slots = GetContainerNumSlots(bag)
+        if slots then
+            for slot = 1, slots do
+                local link = GetContainerItemLink(bag, slot)
+                if link then
+                    local name = GetItemInfo(link)
+                    if name == itemName then
+                        return bag, slot
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
 function Common:GetItemCount(item, includeBank)
     return GetItemCount(item, includeBank)
 end
@@ -241,7 +264,8 @@ end
 function Common:GetTotalBagSlots()
     local total = 0
     for bag = 0, 4 do
-        total = total + GetContainerNumSlots(bag)
+        local slots = GetContainerNumSlots(bag)
+        if slots then total = total + slots end
     end
     return total
 end
@@ -286,15 +310,18 @@ function Common:GetZoneInfo()
 end
 
 function Common:GetMapInfo()
-    local mapId = GetCurrentMapAreaID()
-    local mapName = GetMapNameByID(mapId)
+    -- Make sure map coords are valid for the player's current zone
+    SetMapToCurrentZone()
+
+    local id = GetCurrentMapAreaID()
+    local name = (GetMapInfo())  -- 1st return is the zone name
     local x, y = GetPlayerMapPosition("player")
 
     return {
-        id = mapId,
-        name = mapName,
-        x = x * 100,
-        y = y * 100
+        id   = id,
+        name = name,
+        x    = (x or 0) * 100,
+        y    = (y or 0) * 100,
     }
 end
 

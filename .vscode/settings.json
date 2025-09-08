@@ -1,0 +1,46 @@
+{
+    "Lua.runtime.version": "Lua 5.1",
+    "Lua.runtime.builtin": {
+        "basic": "disable",
+        "debug": "disable",
+        "io": "disable",
+        "math": "disable",
+        "os": "disable",
+        "package": "disable",
+        "string": "disable",
+        "table": "disable",
+        "utf8": "disable"
+    },
+    "Lua.workspace.library": [
+        "~/.vscode/extensions/ketho.wow-api-0.21.0/Annotations/Core",
+        "${workspaceFolder}/.wow-3.3.5-stubs"
+    ],
+    // Don't auto-import third-party defs the server detects
+    "Lua.workspace.checkThirdParty": false,
+    "Lua.diagnostics.globals": [
+        "ReloadUI",
+        "SlashCmdList",
+        "UIDropDownMenu_SetWidth",
+        "UIDropDownMenu_Initialize",
+        "UIDropDownMenu_AddButton",
+        "UIDropDownMenu_CreateInfo",
+        "UIDropDownMenu_SetSelectedValue",
+        "CharacterFrame",
+        "CR_CRIT_MELEE",
+        "CR_HIT_MELEE",
+        "CR_HASTE_MELEE",
+        "MouseIsOver",
+        "WorldFrame",
+        "ChatFrame1EditBox",
+        "StaticPopupDialogs",
+        "StaticPopup_Show"
+    ],
+    "Lua.workspace.ignoreDir": [
+        ".git",
+        "Interface",
+        "WTF",
+        "Cache"
+    ],
+    "Lua.completion.callSnippet": "Both",
+    "Lua.hint.enable": true
+}

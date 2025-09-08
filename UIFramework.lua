@@ -341,22 +341,39 @@ function UIFramework:CreateCheckBox(parent, labelText, checked, onChange, flatDe
     end
 
     container.checkBox = checkBox
+
+    function container:SetChecked(v)
+        if self.checkBox and self.checkBox.SetChecked then
+            v = (v and true) or false
+            self.checkBox:SetChecked(v)
+            if self.checkBox.checked ~= nil and self.checkBox.checkMark then
+                self.checkBox.checked = v
+                self.checkBox.checkMark:SetText(v and "✓" or "")
+            end
+        end
+    end
+
+    function container:GetChecked()
+        if self.checkBox and self.checkBox.GetChecked then
+            local v = self.checkBox:GetChecked()
+            return (v == true) or (v == 1)
+        end
+        return false
+    end
+
     return container
 end
 
 -- Edit box creation
-function UIFramework:CreateEditBox(parent, width, height, text, flatDesign)
+function UIFramework:CreateEditBox(parent, width, height, textOrCallback, flatDesign)
     local editBox
-
     if flatDesign then
         editBox = CreateFrame("EditBox", self:GetUniqueFrameName("EditBox"), parent)
         editBox:SetSize(width or 100, height or 20)
-
         editBox:SetBackdrop(CreateFlatBackdrop())
         editBox:SetBackdropColor(0.1, 0.1, 0.1, 1)
         editBox:SetBackdropBorderColor(unpack(FLAT_COLORS.border))
-
-        editBox:SetFont("Fonts\\FRIZQT__.TTF", 12)
+        editBox:SetFont("Fonts\\FRIZQT__.TTF", 12, "")
         editBox:SetTextColor(unpack(FLAT_COLORS.text))
         editBox:SetTextInsets(5, 5, 0, 0)
     else
@@ -364,14 +381,18 @@ function UIFramework:CreateEditBox(parent, width, height, text, flatDesign)
         editBox:SetSize(width or 100, height or 20)
     end
 
-    editBox:SetText(text or "")
     editBox:SetAutoFocus(false)
-    editBox:SetScript("OnEnterPressed", function(self)
-        self:ClearFocus()
-    end)
-    editBox:SetScript("OnEscapePressed", function(self)
-        self:ClearFocus()
-    end)
+    editBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    editBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    if type(textOrCallback) == "function" then
+        editBox:SetText("")
+        editBox:SetScript("OnTextChanged", function(self)
+            textOrCallback(self:GetText())
+        end)
+    else
+        editBox:SetText(textOrCallback or "")
+    end
 
     return editBox
 end
