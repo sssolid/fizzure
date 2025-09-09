@@ -1,384 +1,618 @@
--- Hunter.lua - Hunter Pet Management Module with FIXED food list and drag/drop
+-- Hunter.lua - Refactored Hunter Pet Management Module using new architecture
 local HunterModule = {}
 
-HunterModule.name = "Hunter Pet Manager"
-HunterModule.version = "3.3"
-HunterModule.author = "Fizzure"
-HunterModule.category = "Class-Specific"
-HunterModule.classRestriction = "HUNTER"
-
-function HunterModule:GetDefaultSettings()
+-- REQUIRED: Module manifest
+function HunterModule:GetManifest()
     return {
-        enabled = true,
-        showFoodStatus = true,
-        lowFoodThreshold = 10,
-        statusFrameMinimized = false,
-        windowPosition = nil,
-        petProfiles = {},
-        keybindings = {
-            feedPet = "ALT-F",
-            toggleStatus = "ALT-SHIFT-F"
-        },
-        notifications = {
-            feeding = true,
-            lowFood = true,
-            noFood = true
-        }
+        name = "Hunter Pet Manager",
+        version = "3.4",
+        author = "Fizzure Team",
+        category = "Class-Specific",
+        description = "Complete hunter pet management with food tracking and profiles",
+        
+        classRestriction = "HUNTER",
+        minLevel = 10,
+        
+        hasUI = true,
+        hasSettings = true,
+        hasKeybindings = true
     }
 end
 
+-- REQUIRED: Default settings
+function HunterModule:GetDefaultSettings()
+    return {
+        enabled = true,
+        showStatusFrame = true,
+        statusFrameMinimized = false,
+        framePosition = nil,
+        
+        -- Pet management
+        autoFeed = true,
+        lowFoodThreshold = 10,
+        feedOnlyWhenUnhappy = false,
+        
+        -- Notifications
+        notifications = {
+            feeding = true,
+            lowFood = true,
+            noFood = true,
+            petSummoned = true
+        },
+        
+        -- Keybindings
+        keybindings = {
+            feedPet = "ALT-F",
+            toggleStatus = "ALT-SHIFT-F",
+            toggleProfile = "ALT-P"
+        },
+        
+        -- Pet profiles (stored per pet name)
+        petProfiles = {}
+    }
+end
+
+-- Settings validation
 function HunterModule:ValidateSettings(settings)
     return type(settings.enabled) == "boolean" and
-            type(settings.showFoodStatus) == "boolean" and
-            type(settings.lowFoodThreshold) == "number"
+           type(settings.autoFeed) == "boolean" and
+           type(settings.lowFoodThreshold) == "number" and
+           settings.lowFoodThreshold >= 0
 end
 
-function HunterModule:EnsureSettings()
-    if not self.settings or not next(self.settings) then
-        self.settings = self:GetDefaultSettings()
-        if self.Fizzure then
-            self.Fizzure:SetModuleSettings(self.name, self.settings)
-        end
-    end
-end
-
-function HunterModule:Initialize()
+-- Core initialization - NO UI CREATION HERE
+function HunterModule:OnInitialize()
+    -- Validate class
     local _, playerClass = UnitClass("player")
     if playerClass ~= "HUNTER" then
+        self:Log("ERROR", "Hunter module loaded on non-hunter character")
         return false
     end
-
-    if not self.Fizzure then
-        print("|cffff0000Hunter Module Error:|r Core reference missing")
-        return false
+    
+    -- Initialize settings
+    if not self.settings or not next(self.settings) then
+        self.settings = self:GetDefaultSettings()
+        self.Fizzure:SetModuleSettings(self.name, self.settings)
     end
-
-    self.settings = self.Fizzure:GetModuleSettings(self.name)
-    self:EnsureSettings()
-
-    -- self.debugAPI = self.Fizzure:GetDebugAPI()
-
+    
     -- Initialize tracking variables
     self.currentPet = nil
     self.availableFoods = {}
     self.lastFoodCheck = 0
     self.lastManualFeed = 0
-
-    -- Create UI elements
-    self:CreateStatusFrame()
-    self:CreatePetProfileFrame()
-
-    -- Register events
+    self.lastAutoFeed = 0
+    
+    -- Create event frame
     self.eventFrame = CreateFrame("Frame")
     self.eventFrame:RegisterEvent("UNIT_PET")
     self.eventFrame:RegisterEvent("PET_UI_UPDATE")
     self.eventFrame:RegisterEvent("BAG_UPDATE")
     self.eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
     self.eventFrame:RegisterEvent("PLAYER_PET_CHANGED")
-
-    self.eventFrame:SetScript("OnEvent", function(self, event, ...)
-        HunterModule:OnEvent(event, ...)
+    self.eventFrame:RegisterEvent("PET_STABLE_UPDATE")
+    
+    self.eventFrame:SetScript("OnEvent", function(frame, event, ...)
+        self:OnEvent(event, ...)
     end)
-
-    -- Update timer
-    self.updateTimer = FizzureCommon:NewTicker(10, function()
-        self:UpdateCurrentPet()
-        self:CheckFoodSupply()
-        self:UpdateStatusFrame()
-    end)
-
+    
     -- Initialize pet data
     self:UpdateCurrentPet()
     self:ScanAvailableFoods()
-
-    if self.settings.showFoodStatus then
-        self.statusFrame:Show()
-    end
-
-    print("|cff00ff00Hunter Module|r Initialized")
+    
+    self:Log("INFO", "Hunter module core initialized")
     return true
 end
 
-function HunterModule:Shutdown()
+-- UI creation - called after framework UI is ready
+function HunterModule:OnUIReady()
+    -- Create status frame
+    self:CreateStatusFrame()
+    
+    -- Create pet profile frame
+    self:CreatePetProfileFrame()
+    
+    -- Show status frame if enabled
+    if self.settings.showStatusFrame then
+        self.statusFrame:Show()
+    end
+    
+    self:Log("INFO", "Hunter module UI ready")
+    return true
+end
+
+-- Module activation
+function HunterModule:OnEnable()
+    -- Start update timer
+    self.updateTimer = FizzureCommon:NewTicker(5, function()
+        self:OnUpdate()
+    end)
+    
+    -- Register keybindings
+    self:RegisterKeybindings()
+    
+    -- Show status frame if configured
+    if self.settings.showStatusFrame and self.statusFrame then
+        self.statusFrame:Show()
+    end
+    
+    -- Initial status update
+    self:UpdateCurrentPet()
+    self:UpdateStatusDisplay()
+    
+    self.ui.ShowNotification("Hunter Module", "Pet management activated", "success", 2)
+    self:Log("INFO", "Hunter module enabled")
+    
+    return true
+end
+
+-- Module deactivation
+function HunterModule:OnDisable()
+    -- Stop timer
     if self.updateTimer then
         self.updateTimer:Cancel()
+        self.updateTimer = nil
     end
-
-    if self.eventFrame then
-        self.eventFrame:UnregisterAllEvents()
-    end
-
+    
+    -- Hide UI
     if self.statusFrame then
         self.statusFrame:Hide()
     end
-
+    
     if self.profileFrame then
         self.profileFrame:Hide()
     end
+    
+    -- Unregister keybindings
+    self:UnregisterKeybindings()
+    
+    self.ui.ShowNotification("Hunter Module", "Pet management deactivated", "info", 2)
+    self:Log("INFO", "Hunter module disabled")
+    
+    return true
 end
 
-function HunterModule:OnEvent(event, ...)
-    if event == "UNIT_PET" or event == "PLAYER_PET_CHANGED" then
-        self:UpdateCurrentPet()
-    elseif event == "PET_UI_UPDATE" then
-        self:UpdateStatusFrame()
-    elseif event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
-        self:ScanAvailableFoods()
-        self:UpdateStatusFrame()
-        if self.profileFrame and self.profileFrame:IsShown() then
-            -- Delay the update slightly to ensure bag data is ready
-            FizzureCommon:After(0.1, function()
-                self:UpdatePetProfileFrame()
-            end)
+-- Settings update handler
+function HunterModule:OnSettingsUpdate(newSettings)
+    local oldSettings = self.settings
+    self.settings = newSettings
+    
+    -- Handle status frame visibility change
+    if oldSettings.showStatusFrame ~= newSettings.showStatusFrame then
+        if newSettings.showStatusFrame and self.statusFrame then
+            self.statusFrame:Show()
+        elseif self.statusFrame then
+            self.statusFrame:Hide()
         end
     end
+    
+    -- Update keybindings if changed
+    if oldSettings.keybindings.feedPet ~= newSettings.keybindings.feedPet or
+       oldSettings.keybindings.toggleStatus ~= newSettings.keybindings.toggleStatus or
+       oldSettings.keybindings.toggleProfile ~= newSettings.keybindings.toggleProfile then
+        self:UnregisterKeybindings()
+        self:RegisterKeybindings()
+    end
+    
+    -- Update displays
+    self:UpdateStatusDisplay()
+    
+    self:Log("INFO", "Settings updated")
 end
 
-function HunterModule:UpdateCurrentPet()
-    if not UnitExists("pet") then
-        self.currentPet = nil
-        return
+-- Cleanup
+function HunterModule:OnShutdown()
+    -- Stop timers
+    if self.updateTimer then
+        self.updateTimer:Cancel()
+        self.updateTimer = nil
     end
-
-    local name = UnitName("pet")
-    local family = UnitCreatureFamily("pet")
-    local level = UnitLevel("pet") or 1
-
-    if name then
-        self.currentPet = {
-            name = name,
-            family = family or "Unknown",
-            level = level
-        }
-
-        -- Ensure profile exists
-        if not self.settings.petProfiles[name] then
-            self.settings.petProfiles[name] = {
-                family = family or "Unknown",
-                preferredFoods = {},
-                lastFed = 0
-            }
-            self.Fizzure:SetModuleSettings(self.name, self.settings)
-        end
+    
+    -- Cleanup events
+    if self.eventFrame then
+        self.eventFrame:UnregisterAllEvents()
+        self.eventFrame = nil
     end
+    
+    -- Cleanup UI
+    if self.statusFrame then
+        self.statusFrame:Hide()
+        self.statusFrame = nil
+    end
+    
+    if self.profileFrame then
+        self.profileFrame:Hide()
+        self.profileFrame = nil
+    end
+    
+    -- Unregister keybindings
+    self:UnregisterKeybindings()
+    
+    self:Log("INFO", "Hunter module shutdown complete")
 end
 
--- ENHANCED and FIXED food scanning that actually works
-function HunterModule:ScanAvailableFoods()
-    self.availableFoods = {}
-
-    -- Common food items by type for 3.3.5 WotLK
-    local foodTypes = {
-        -- Meat and Fish
-        "meat", "fish", "salmon", "venison", "boar", "clefthoof", "mammoth",
-        -- Bread and Cheese
-        "bread", "cheese", "biscuit",
-        -- Fruits and Vegetables
-        "apple", "fruit", "berry", "banana",
-        -- Special foods
-        "conjured", "food", "ration"
-    }
-
-    for bag = 0, 4 do
-        local slots = GetContainerNumSlots(bag) or 0
-        for slot = 1, slots do
-            local itemLink = GetContainerItemLink(bag, slot)
-            if itemLink then
-                local _, itemCount = GetContainerItemInfo(bag, slot)
-                if itemCount and itemCount > 0 then
-                    -- Get item info
-                    local itemName, _, quality, itemLevel, minLevel, itemType, itemSubType = GetItemInfo(itemLink)
-
-                    if itemName and itemType then
-                        local isFood = false
-                        local itemNameLower = string.lower(itemName)
-
-                        -- Check if it's explicitly food type
-                        if itemType == "Consumable" and
-                                (itemSubType == "Food & Drink" or itemSubType == "Food") then
-                            isFood = true
-                        end
-
-                        -- Check against common food keywords if not already identified
-                        if not isFood then
-                            for _, foodType in ipairs(foodTypes) do
-                                if string.find(itemNameLower, foodType) then
-                                    isFood = true
-                                    break
-                                end
-                            end
-                        end
-
-                        -- Special check for items that might be food but missed
-                        if not isFood and itemType == "Consumable" then
-                            -- Check for food-like patterns
-                            if string.find(itemNameLower, "roasted") or
-                                    string.find(itemNameLower, "cooked") or
-                                    string.find(itemNameLower, "smoked") or
-                                    string.find(itemNameLower, "fresh") or
-                                    string.find(itemNameLower, "raw") then
-                                isFood = true
-                            end
-                        end
-
-                        if isFood then
-                            table.insert(self.availableFoods, {
-                                name = itemName,
-                                link = itemLink,
-                                count = itemCount,
-                                quality = quality or 1,
-                                level = itemLevel or 1,
-                                bag = bag,
-                                slot = slot
-                            })
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- Sort by name for consistent display
-    table.sort(self.availableFoods, function(a, b)
-        return a.name < b.name
-    end)
-
-    -- Debug output
-    if self.Fizzure and self.Fizzure.debug.enabled then
-        self.Fizzure:LogDebug("DEBUG", "Found " .. #self.availableFoods .. " food items", "Hunter")
-    end
-end
-
-function HunterModule:CheckFoodSupply()
-    if not self.currentPet then return end
-
-    local profile = self.settings.petProfiles[self.currentPet.name]
-    if not profile or not profile.preferredFoods then return end
-
-    local totalFood = 0
-    for i = 1, 6 do
-        local foodName = profile.preferredFoods[i]
-        if foodName and foodName ~= "" then
-            totalFood = totalFood + FizzureCommon:GetItemCount(foodName)
-        end
-    end
-
-    if totalFood > 0 and totalFood <= self.settings.lowFoodThreshold then
-        if self.settings.notifications.lowFood then
-            self.Fizzure:ShowNotification("Low Food Warning",
-                    "Running low on food for " .. self.currentPet.name .. " (" .. totalFood .. " remaining)",
-                    "warning", 5)
-        end
-    end
-end
-
+-- Create status frame using UI interface
 function HunterModule:CreateStatusFrame()
-    self.statusFrame = FizzureUI:CreateStatusFrame("HunterPetStatus", "Pet Status", 200, 180)
-
-    if self.settings.windowPosition then
+    self.statusFrame = self.ui.CreateStatusFrame("Pet Status", 220, 160)
+    
+    -- Position frame
+    if self.settings.framePosition then
         self.statusFrame:ClearAllPoints()
-        self.statusFrame:SetPoint(self.settings.windowPosition.point,
-                UIParent,
-                self.settings.windowPosition.relativePoint,
-                self.settings.windowPosition.x,
-                self.settings.windowPosition.y)
+        self.statusFrame:SetPoint(
+            self.settings.framePosition.point,
+            UIParent,
+            self.settings.framePosition.point,
+            self.settings.framePosition.x,
+            self.settings.framePosition.y
+        )
     end
-
-    -- Pet name
-    self.petNameLabel = FizzureUI:CreateLabel(self.statusFrame, "No Pet")
-    self.petNameLabel:SetPoint("TOP", 0, -25)
-
-    -- Happiness bar
-    self.happinessBar = FizzureUI:CreateStatusBar(self.statusFrame, 160, 16, 1, 3, 3)
-    self.happinessBar:SetPoint("TOP", 0, -45)
-    self.happinessBar:SetStatusBarColor(0.3, 1, 0.3)
-    self.happinessBar:SetText("Happy")
-
-    -- Food count
-    self.foodLabel = FizzureUI:CreateLabel(self.statusFrame, "Food: 0")
-    self.foodLabel:SetPoint("TOP", 0, -70)
-
-    -- Feed button
-    self.feedButton = FizzureUI:CreateButton(self.statusFrame, "Feed Pet", 120, 24, function()
-        self:FeedPet()
-        -- Immediately update status after feeding
-        FizzureCommon:After(0.1, function()
-            self:UpdateStatusFrame()
-        end)
-    end)
-    self.feedButton:SetPoint("TOP", 0, -95)
-
-    -- Profile button
-    self.profileButton = FizzureUI:CreateButton(self.statusFrame, "Profiles", 80, 20, function()
-        self:ToggleProfileFrame()
-    end)
-    self.profileButton:SetPoint("TOP", 0, -125)
-
-    -- Keybinding info (positioned below buttons)
-    self.keybindLabel = FizzureUI:CreateLabel(self.statusFrame, "Key: " .. (self.settings.keybindings.feedPet or "None"), "GameFontNormalSmall")
-    self.keybindLabel:SetPoint("TOP", 0, -150)
-
-    -- Save position on move
+    
+    -- Save position when moved
     self.statusFrame.OnPositionChanged = function()
-        local point, _, relativePoint, x, y = self.statusFrame:GetPoint()
-        self.settings.windowPosition = {
+        local point, _, _, x, y = self.statusFrame:GetPoint()
+        self.settings.framePosition = {
             point = point,
-            relativePoint = relativePoint,
             x = x,
             y = y
         }
         self.Fizzure:SetModuleSettings(self.name, self.settings)
     end
+    
+    -- Pet name label
+    self.petNameLabel = self.ui.CreateLabel(self.statusFrame, "No Pet", "GameFontNormal")
+    self.petNameLabel:SetPoint("TOP", 0, -25)
+    
+    -- Happiness bar
+    self.happinessBar = FizzureUI:CreateStatusBar(self.statusFrame, 180, 16, 1, 3, 1, true)
+    self.happinessBar:SetPoint("TOP", 0, -50)
+    self.happinessBar:SetStatusBarColor(0.8, 0.2, 0.2)
+    
+    -- Food count label
+    self.foodLabel = self.ui.CreateLabel(self.statusFrame, "Food: 0", "GameFontNormalSmall")
+    self.foodLabel:SetPoint("TOP", 0, -75)
+    
+    -- Feed button
+    self.feedButton = self.ui.CreateButton(self.statusFrame, "Feed Pet", function()
+        self:FeedPet()
+    end)
+    self.feedButton:SetSize(80, 25)
+    self.feedButton:SetPoint("TOP", 0, -100)
+    
+    -- Profile button
+    local profileButton = self.ui.CreateButton(self.statusFrame, "Profile", function()
+        self:ToggleProfileFrame()
+    end)
+    profileButton:SetSize(60, 25)
+    profileButton:SetPoint("TOPLEFT", self.feedButton, "TOPRIGHT", 10, 0)
+    
+    -- Keybind label
+    self.keybindLabel = self.ui.CreateLabel(self.statusFrame, "Key: " .. (self.settings.keybindings.feedPet or "None"), "GameFontNormalSmall")
+    self.keybindLabel:SetPoint("BOTTOM", 0, 10)
+    
+    self.statusFrame:Hide()
 end
 
-function HunterModule:UpdateStatusFrame()
-    if not self.statusFrame or not self.statusFrame:IsShown() then return end
+-- Create pet profile frame
+function HunterModule:CreatePetProfileFrame()
+    self.profileFrame = self.ui.CreateWindow("Pet Profile", 400, 350)
+    
+    local content = self.profileFrame.content
+    
+    -- Current pet label
+    self.profilePetLabel = self.ui.CreateLabel(content, "No Pet Selected", "GameFontNormalLarge")
+    self.profilePetLabel:SetPoint("TOP", 0, -20)
+    
+    -- Food slots grid
+    self.foodSlots = {}
+    for i = 1, 6 do
+        local slot = self:CreateFoodSlot(content, i)
+        self.foodSlots[i] = slot
+    end
+    
+    -- Available food list
+    local foodListFrame = FizzureUI:CreateScrollFrame(content, 150, 200, 20, "HunterFoodList")
+    foodListFrame:SetPoint("TOPLEFT", 240, -60)
+    self.foodListFrame = foodListFrame
+    
+    -- Clear all button
+    local clearButton = self.ui.CreateButton(content, "Clear All", function()
+        self:ClearAllFoodSlots()
+    end)
+    clearButton:SetSize(80, 25)
+    clearButton:SetPoint("BOTTOM", 0, 20)
+    
+    self.profileFrame:Hide()
+end
 
+-- Create food slot
+function HunterModule:CreateFoodSlot(parent, index)
+    local slot = CreateFrame("Button", "HunterFoodSlot" .. index, parent)
+    slot:SetSize(50, 50)
+    
+    -- Background
+    slot:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        tile = false, edgeSize = 1,
+        insets = { left = 0, right = 0, top = 0, bottom = 0 }
+    })
+    slot:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
+    slot:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    
+    -- Item texture
+    local texture = slot:CreateTexture(nil, "ARTWORK")
+    texture:SetSize(46, 46)
+    texture:SetPoint("CENTER")
+    texture:Hide()
+    slot.texture = texture
+    
+    -- Count text
+    local countText = slot:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    countText:SetPoint("BOTTOMRIGHT", -2, 2)
+    slot.countText = countText
+    
+    -- Position
+    local row = math.floor((index - 1) / 3)
+    local col = (index - 1) % 3
+    slot:SetPoint("TOPLEFT", 20 + col * 60, -60 - row * 60)
+    
+    -- Click handlers
+    slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    slot:SetScript("OnClick", function(self, button)
+        if button == "RightButton" then
+            self:ClearFoodSlot(index)
+        end
+    end)
+    
+    -- Drag and drop
+    slot:SetScript("OnReceiveDrag", function()
+        self:HandleFoodDrop(index)
+    end)
+    
+    -- Tooltip
+    slot:SetScript("OnEnter", function(self)
+        if slot.itemName then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetItemByID(slot.itemName)
+            GameTooltip:Show()
+        else
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Empty Food Slot")
+            GameTooltip:AddLine("Drag food here", 0.7, 0.7, 0.7)
+            GameTooltip:AddLine("Right-click to clear", 0.7, 0.7, 0.7)
+            GameTooltip:Show()
+        end
+    end)
+    
+    slot:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
+    -- Slot methods
+    function slot:SetItem(itemName, itemLink)
+        self.itemName = itemName
+        self.itemLink = itemLink
+        
+        if itemName then
+            local _, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemName)
+            if icon then
+                self.texture:SetTexture(icon)
+                self.texture:Show()
+            end
+            
+            local count = FizzureCommon:GetItemCount(itemName)
+            self.countText:SetText(count > 0 and count or "")
+        else
+            self.texture:Hide()
+            self.countText:SetText("")
+        end
+    end
+    
+    function slot:ClearItem()
+        self.itemName = nil
+        self.itemLink = nil
+        self.texture:Hide()
+        self.countText:SetText("")
+    end
+    
+    return slot
+end
+
+-- Event handling
+function HunterModule:OnEvent(event, ...)
+    if event == "UNIT_PET" or event == "PLAYER_PET_CHANGED" then
+        self:UpdateCurrentPet()
+        self:UpdateStatusDisplay()
+    elseif event == "PET_UI_UPDATE" then
+        self:UpdateStatusDisplay()
+    elseif event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
+        local currentTime = GetTime()
+        if currentTime - self.lastFoodCheck > 2 then
+            self.lastFoodCheck = currentTime
+            self:ScanAvailableFoods()
+            self:UpdateStatusDisplay()
+        end
+    elseif event == "PET_STABLE_UPDATE" then
+        self:UpdateCurrentPet()
+    end
+end
+
+-- Update loop
+function HunterModule:OnUpdate()
+    if not UnitExists("pet") then
+        if self.currentPet then
+            self.currentPet = nil
+            self:UpdateStatusDisplay()
+        end
+        return
+    end
+    
+    -- Auto-feed logic
+    if self.settings.autoFeed then
+        self:CheckAutoFeed()
+    end
+    
+    -- Update display
+    self:UpdateStatusDisplay()
+end
+
+-- Update current pet info
+function HunterModule:UpdateCurrentPet()
+    if not UnitExists("pet") then
+        if self.currentPet then
+            self.currentPet = nil
+            if self.settings.notifications.petSummoned then
+                self.ui.ShowNotification("Pet Dismissed", "Your pet has been dismissed", "info", 2)
+            end
+        end
+        return
+    end
+    
+    local petName = UnitName("pet")
+    local petFamily = UnitCreatureFamily("pet") or "Unknown"
+    local petLevel = UnitLevel("pet")
+    
+    if not self.currentPet or self.currentPet.name ~= petName then
+        self.currentPet = {
+            name = petName,
+            family = petFamily,
+            level = petLevel
+        }
+        
+        -- Create profile if doesn't exist
+        if not self.settings.petProfiles[petName] then
+            self.settings.petProfiles[petName] = {
+                family = petFamily,
+                preferredFoods = {},
+                lastFed = 0
+            }
+            self.Fizzure:SetModuleSettings(self.name, self.settings)
+        end
+        
+        if self.settings.notifications.petSummoned then
+            self.ui.ShowNotification("Pet Active", petName .. " is ready", "success", 2)
+        end
+        
+        self:Log("INFO", "Pet updated: " .. petName .. " (" .. petFamily .. ")")
+    end
+end
+
+-- Scan available foods
+function HunterModule:ScanAvailableFoods()
+    self.availableFoods = {}
+    
+    local petFoodTypes = {
+        ["Beast"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit"},
+        ["Bird"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit"},
+        ["Boar"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit", "Fungus"},
+        ["Carrion Bird"] = {"Meat", "Fish"},
+        ["Cat"] = {"Meat", "Fish"},
+        ["Bear"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit", "Fungus"},
+        ["Crab"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit", "Fungus"},
+        ["Crocolisk"] = {"Meat", "Fish"},
+        ["Gorilla"] = {"Fruit"},
+        ["Raptor"] = {"Meat", "Fish"},
+        ["Scorpid"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit", "Fungus"},
+        ["Spider"] = {"Meat", "Fish"},
+        ["Tallstrider"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit", "Fungus"},
+        ["Turtle"] = {"Meat", "Fish", "Bread", "Cheese", "Fruit", "Fungus"},
+        ["Wind Serpent"] = {"Meat", "Fish"},
+        ["Wolf"] = {"Meat", "Fish"}
+    }
+    
+    if not self.currentPet then return end
+    
+    local validTypes = petFoodTypes[self.currentPet.family] or {"Meat", "Fish"}
+    
+    -- Scan bags for food
+    for bag = 0, 4 do
+        local slots = GetContainerNumSlots(bag) or 0
+        for slot = 1, slots do
+            local itemLink = GetContainerItemLink(bag, slot)
+            if itemLink then
+                local itemName = GetItemInfo(itemLink)
+                local count = select(2, GetContainerItemInfo(bag, slot)) or 0
+                
+                if itemName and count > 0 then
+                    -- Check if item is food for this pet family
+                    local tooltip = CreateFrame("GameTooltip", "HunterFoodScanTooltip", nil, "GameTooltipTemplate")
+                    tooltip:SetOwner(UIParent, "ANCHOR_NONE")
+                    tooltip:SetBagItem(bag, slot)
+                    
+                    local isFood = false
+                    for i = 1, tooltip:NumLines() do
+                        local line = _G[tooltip:GetName() .. "TextLeft" .. i]
+                        if line then
+                            local text = line:GetText() or ""
+                            for _, foodType in ipairs(validTypes) do
+                                if string.find(text, foodType) then
+                                    isFood = true
+                                    break
+                                end
+                            end
+                        end
+                        if isFood then break end
+                    end
+                    
+                    if isFood then
+                        self.availableFoods[itemName] = count
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Update status display
+function HunterModule:UpdateStatusDisplay()
+    if not self.statusFrame then return end
+    
     if self.currentPet then
+        -- Update pet name
         self.petNameLabel:SetText(self.currentPet.name)
         self.petNameLabel:SetTextColor(1, 1, 1)
-
+        
         -- Update happiness
         if UnitExists("pet") then
             local happiness = GetPetHappiness()
             if happiness then
                 self.happinessBar:SetValue(happiness)
-
+                
                 local colors = {
-                    {1, 0.3, 0.3},  -- Unhappy
-                    {1, 1, 0.3},    -- Content
-                    {0.3, 1, 0.3}   -- Happy
+                    {1, 0.3, 0.3},  -- Unhappy (1)
+                    {1, 1, 0.3},    -- Content (2)
+                    {0.3, 1, 0.3}   -- Happy (3)
                 }
                 local texts = {"Unhappy", "Content", "Happy"}
-
+                
                 local color = colors[happiness] or colors[1]
                 self.happinessBar:SetStatusBarColor(color[1], color[2], color[3])
                 self.happinessBar:SetText(texts[happiness] or "Unknown")
             end
         end
-
+        
         -- Update food count
-        local profile = self.settings.petProfiles[self.currentPet.name]
         local totalFood = 0
-
+        local profile = self.settings.petProfiles[self.currentPet.name]
+        
         if profile and profile.preferredFoods then
             for i = 1, 6 do
                 local foodName = profile.preferredFoods[i]
-                if foodName and foodName ~= "" then
-                    totalFood = totalFood + FizzureCommon:GetItemCount(foodName)
+                if foodName then
+                    totalFood = totalFood + (self.availableFoods[foodName] or 0)
                 end
             end
         end
-
+        
         self.foodLabel:SetText("Food: " .. totalFood)
         if totalFood <= self.settings.lowFoodThreshold then
             self.foodLabel:SetTextColor(1, 0.3, 0.3)
         else
             self.foodLabel:SetTextColor(1, 1, 1)
         end
-
+        
         self.feedButton:Enable()
     else
+        -- No pet
         self.petNameLabel:SetText("No Pet")
         self.petNameLabel:SetTextColor(0.7, 0.7, 0.7)
         self.happinessBar:SetValue(1)
@@ -388,621 +622,239 @@ function HunterModule:UpdateStatusFrame()
         self.foodLabel:SetTextColor(0.7, 0.7, 0.7)
         self.feedButton:Disable()
     end
-
-    -- Update keybind display
-    self.keybindLabel:SetText("Key: " .. (self.settings.keybindings.feedPet or "None"))
 end
 
-function HunterModule:FeedPet()
-    if not self.currentPet then return end
-    if InCombatLockdown and InCombatLockdown() then return end  -- protected actions in combat
+-- Auto-feed logic
+function HunterModule:CheckAutoFeed()
+    if not self.currentPet or not UnitExists("pet") then return end
+    
+    local currentTime = GetTime()
+    if currentTime - self.lastAutoFeed < 30 then return end -- Prevent spam
+    
+    local happiness = GetPetHappiness()
+    if self.settings.feedOnlyWhenUnhappy and happiness and happiness >= 2 then
+        return
+    end
+    
+    if happiness and happiness < 3 then
+        if self:FeedPet(true) then
+            self.lastAutoFeed = currentTime
+        end
+    end
+end
 
+-- Feed pet method
+function HunterModule:FeedPet(isAuto)
+    if not self.currentPet or not UnitExists("pet") then return false end
+    
     local profile = self.settings.petProfiles[self.currentPet.name]
-    if not profile or not profile.preferredFoods then return end
-
-    -- iterate preferred foods in order
+    if not profile or not profile.preferredFoods then return false end
+    
+    -- Find first available food
     for i = 1, 6 do
         local foodName = profile.preferredFoods[i]
-        if foodName and foodName ~= "" then
-            local count = FizzureCommon:GetItemCount(foodName)
-            if count and count > 0 then
-                local bag, slot = FindItemInBags(foodName)
-                if bag then
-                    -- Cast Feed Pet then use the item from its bag slot
-                    CastSpellByName("Feed Pet")
-                    UseContainerItem(bag, slot)
-
-                    if self.settings.notifications and self.settings.notifications.feeding then
-                        self.Fizzure:ShowNotification(
-                            "Pet Fed",
-                            self.currentPet.name .. " fed with " .. foodName,
-                            "success",
-                            3
-                        )
-                    end
-
-                    profile.lastFed = GetTime()
-                    self.Fizzure:SetModuleSettings(self.name, self.settings)
-                    return
-                end
+        if foodName and self.availableFoods[foodName] and self.availableFoods[foodName] > 0 then
+            UseItemByName(foodName)
+            
+            local feedType = isAuto and "Auto-fed" or "Fed"
+            if not isAuto or self.settings.notifications.feeding then
+                self.ui.ShowNotification(feedType, "Used " .. foodName, "success", 2)
             end
+            
+            self:Log("INFO", feedType .. " pet with " .. foodName)
+            return true
         end
     end
-
-    if self.settings.notifications and self.settings.notifications.noFood then
-        self.Fizzure:ShowNotification(
-            "No Food",
-            "No preferred food available for " .. self.currentPet.name,
-            "warning",
-            3
-        )
+    
+    -- No food available
+    if self.settings.notifications.noFood then
+        self.ui.ShowNotification("No Food", "No preferred food available", "warning", 3)
     end
+    
+    return false
 end
 
--- COMPLETELY REWRITTEN pet profile frame with WORKING food list
-function HunterModule:CreatePetProfileFrame()
-    self.profileFrame = FizzureUI:CreateWindow("HunterPetProfiles", "Pet Food Profiles", 650, 500)
-
-    -- Current pet label
-    self.currentPetLabel = FizzureUI:CreateLabel(self.profileFrame.content, "Current Pet: None", "GameFontNormalLarge")
-    self.currentPetLabel:SetPoint("TOP", 0, -10)
-
-    -- LEFT SIDE - Preferred Foods Panel
-    local leftPanel = CreateFrame("Frame", nil, self.profileFrame.content)
-    leftPanel:SetSize(280, 350)
-    leftPanel:SetPoint("TOPLEFT", 20, -50)
-    leftPanel:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 16,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 }
-    })
-    leftPanel:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
-
-    local leftTitle = FizzureUI:CreateLabel(leftPanel, "Preferred Foods", "GameFontNormal")
-    leftTitle:SetPoint("TOP", 0, -10)
-
-    -- Food slots in a 2x3 grid - ENHANCED with better icon handling
-    self.foodSlots = {}
-    for i = 1, 6 do
-        local slot = CreateFrame("Button", "FizzureFoodSlot" .. i, leftPanel)
-        slot:SetSize(50, 50)
-        slot:SetNormalTexture("Interface\\Buttons\\UI-EmptySlot-White")
-        slot:SetHighlightTexture("Interface\\Buttons\\UI-Panel-Button-Highlight")
-
-        -- Background texture for empty slots
-        local emptyTexture = slot:CreateTexture(nil, "BACKGROUND")
-        emptyTexture:SetSize(46, 46)
-        emptyTexture:SetPoint("CENTER")
-        emptyTexture:SetTexture("Interface\\Icons\\INV_Misc_Food_01")
-        emptyTexture:SetAlpha(0.3)
-        slot.emptyTexture = emptyTexture
-
-        -- Item texture (will be shown when item is set)
-        local itemTexture = slot:CreateTexture(nil, "ARTWORK")
-        itemTexture:SetSize(46, 46)
-        itemTexture:SetPoint("CENTER")
-        itemTexture:Hide()
-        slot.itemTexture = itemTexture
-
-        -- Count text
-        local countText = slot:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-        countText:SetPoint("BOTTOMRIGHT", -2, 2)
-        slot.countText = countText
-
-        -- Position the slot
-        local row = math.floor((i - 1) / 2)
-        local col = (i - 1) % 2
-        slot:SetPoint("TOPLEFT", 60 + col * 70, -50 - row * 70)
-
-        -- Click handlers
-        slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-        slot:SetScript("OnClick", function(self, button)
-            if button == "RightButton" then
-                HunterModule:ClearFoodSlot(i)
-            end
-        end)
-
-        -- Drag and drop
-        slot:RegisterForDrag("LeftButton")
-        slot:SetScript("OnDragStart", function(self)
-            if slot.itemName then
-                PickupItem(slot.itemName)
-            end
-        end)
-
-        slot:SetScript("OnReceiveDrag", function(self)
-            HunterModule:HandleFoodDrop(i)
-        end)
-
-        -- Tooltip
-        slot:SetScript("OnEnter", function(self)
-            if slot.itemName then
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetItemByID(slot.itemName)
-                GameTooltip:Show()
-            else
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetText("Empty Food Slot")
-                GameTooltip:AddLine("Drag food here or right-click from list", 0.7, 0.7, 0.7)
-                GameTooltip:AddLine("Right-click to clear", 0.7, 0.7, 0.7)
-                GameTooltip:Show()
-            end
-        end)
-
-        slot:SetScript("OnLeave", function()
-            GameTooltip:Hide()
-        end)
-
-        -- Helper functions for the slot
-        slot.SetItem = function(self, itemName, itemLink)
-            self.itemName = itemName
-            self.itemLink = itemLink or itemName
-
-            if itemName then
-                -- Get item icon with multiple fallback methods
-                local itemIcon = nil
-
-                -- Method 1: Direct GetItemIcon
-                if GetItemIcon then
-                    itemIcon = GetItemIcon(itemName)
-                end
-
-                -- Method 2: From GetItemInfo
-                if not itemIcon then
-                    local _, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemName)
-                    itemIcon = icon
-                end
-
-                -- Method 3: From item link if available
-                if not itemIcon and itemLink and itemLink ~= itemName then
-                    local _, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemLink)
-                    itemIcon = icon
-                end
-
-                -- Set the texture
-                if itemIcon then
-                    self.itemTexture:SetTexture(itemIcon)
-                    self.itemTexture:Show()
-                    self.emptyTexture:Hide()
-                else
-                    -- Fallback to default food icon
-                    self.itemTexture:SetTexture("Interface\\Icons\\INV_Misc_Food_01")
-                    self.itemTexture:Show()
-                    self.emptyTexture:Hide()
-                end
-
-                -- Update count
-                local count = GetItemCount(itemName)
-                if count and count > 1 then
-                    self.countText:SetText(tostring(count))
-                    self.countText:Show()
-                else
-                    self.countText:SetText("")
-                    self.countText:Hide()
-                end
-            else
-                self:ClearItem()
-            end
-        end
-
-        slot.ClearItem = function(self)
-            self.itemName = nil
-            self.itemLink = nil
-            self.itemTexture:Hide()
-            self.emptyTexture:Show()
-            self.countText:SetText("")
-            self.countText:Hide()
-        end
-
-        slot.index = i
-        self.foodSlots[i] = slot
-    end
-
-    -- RIGHT SIDE - Available Foods Panel
-    local rightPanel = CreateFrame("Frame", nil, self.profileFrame.content)
-    rightPanel:SetSize(300, 350)
-    rightPanel:SetPoint("TOPRIGHT", -20, -50)
-    rightPanel:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 16,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 }
-    })
-    rightPanel:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
-
-    local rightTitle = FizzureUI:CreateLabel(rightPanel, "Available Foods", "GameFontNormal")
-    rightTitle:SetPoint("TOP", 0, -10)
-
-    local rightSubtitle = FizzureUI:CreateLabel(rightPanel, "(Right-click to add)", "GameFontNormalSmall")
-    rightSubtitle:SetPoint("TOP", 0, -25)
-
-    -- Refresh button
-    local refreshBtn = FizzureUI:CreateButton(rightPanel, "Refresh", 60, 20, function()
-        self:ScanAvailableFoods()
-        self:UpdatePetProfileFrame()
-    end)
-    refreshBtn:SetPoint("TOPRIGHT", -10, -10)
-
-    -- Scroll frame for food list
-    self.foodListScroll = CreateFrame("ScrollFrame", "FoodListScroll", rightPanel, "UIPanelScrollFrameTemplate")
-    self.foodListScroll:SetPoint("TOPLEFT", 10, -50)
-    self.foodListScroll:SetPoint("BOTTOMRIGHT", -25, 10)
-
-    local foodListContent = CreateFrame("Frame", "FoodListContent", self.foodListScroll)
-    foodListContent:SetSize(250, 1)
-    self.foodListScroll:SetScrollChild(foodListContent)
-    self.foodListContent = foodListContent
-
-    -- Enable mousewheel scrolling
-    self.foodListScroll:EnableMouseWheel(true)
-    self.foodListScroll:SetScript("OnMouseWheel", function(self, delta)
-        local currentScroll = self:GetVerticalScroll()
-        local maxScroll = self:GetVerticalScrollRange()
-        local newScroll = currentScroll - (delta * 25)
-        newScroll = math.max(0, math.min(newScroll, maxScroll))
-        self:SetVerticalScroll(newScroll)
-    end)
-
-    -- Bottom buttons
-    local clearAllBtn = FizzureUI:CreateButton(self.profileFrame.content, "Clear All", 80, 24, function()
-        self:ClearAllFoodSlots()
-    end)
-    clearAllBtn:SetPoint("BOTTOM", 0, 15)
-end
-
--- COMPLETELY REWRITTEN update function that ACTUALLY works
-function HunterModule:UpdatePetProfileFrame()
-    if not self.profileFrame or not self.profileFrame:IsShown() then return end
-
-    -- Update pet name
-    if self.currentPet then
-        self.currentPetLabel:SetText("Current Pet: " .. self.currentPet.name .. " (" .. self.currentPet.family .. ")")
-
-        -- Update food slots
-        local profile = self.settings.petProfiles[self.currentPet.name]
-        if profile and profile.preferredFoods then
-            for i = 1, 6 do
-                local foodName = profile.preferredFoods[i]
-                if foodName and foodName ~= "" then
-                    self.foodSlots[i]:SetItem(foodName)
-                else
-                    self.foodSlots[i]:ClearItem()
-                end
-            end
-        else
-            for i = 1, 6 do
-                self.foodSlots[i]:ClearItem()
-            end
-        end
-    else
-        self.currentPetLabel:SetText("Current Pet: None")
-        for i = 1, 6 do
-            self.foodSlots[i]:ClearItem()
-        end
-    end
-
-    -- FORCIBLY rescan foods to ensure we have the latest data
-    self:ScanAvailableFoods()
-
-    -- Clear existing food list items
-    local content = self.foodListContent
-    local children = {content:GetChildren()}
-    for i = 1, #children do
-        children[i]:Hide()
-        children[i]:SetParent(nil)
-    end
-
-    -- Create new food list items
-    local yOffset = -5
-    local buttonHeight = 30
-
-    if #self.availableFoods == 0 then
-        -- Show "no food found" message
-        local noFoodLabel = FizzureUI:CreateLabel(content, "No food items found in bags", "GameFontNormal")
-        noFoodLabel:SetPoint("TOPLEFT", 5, yOffset)
-        noFoodLabel:SetTextColor(0.7, 0.7, 0.7)
-        yOffset = yOffset - 25
-
-        local helpLabel = FizzureUI:CreateLabel(content, "Make sure you have food items in your bags", "GameFontNormalSmall")
-        helpLabel:SetPoint("TOPLEFT", 5, yOffset)
-        helpLabel:SetTextColor(0.5, 0.5, 0.5)
-        yOffset = yOffset - 25
-    else
-        -- Create food item buttons
-        for i, food in ipairs(self.availableFoods) do
-            local foodFrame = CreateFrame("Button", "FoodButton" .. i, content)
-            foodFrame:SetSize(240, buttonHeight)
-            foodFrame:SetPoint("TOPLEFT", 5, yOffset)
-
-            -- Background for hover effect
-            local bg = foodFrame:CreateTexture(nil, "BACKGROUND")
-            bg:SetAllPoints()
-            bg:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
-            bg:SetAlpha(0)
-            foodFrame:SetNormalTexture(bg)
-            foodFrame:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
-
-            -- Food icon with better icon retrieval
-            local icon = foodFrame:CreateTexture(nil, "ARTWORK")
-            icon:SetSize(24, 24)
-            icon:SetPoint("LEFT", 2, 0)
-
-            -- Multiple attempts to get the correct icon
-            local itemIcon = nil
-            if GetItemIcon then
-                itemIcon = GetItemIcon(food.name)
-            end
-            if not itemIcon then
-                local _, _, _, _, _, _, _, _, _, iconTexture = GetItemInfo(food.name)
-                itemIcon = iconTexture
-            end
-            if not itemIcon and food.link then
-                local _, _, _, _, _, _, _, _, _, iconTexture = GetItemInfo(food.link)
-                itemIcon = iconTexture
-            end
-
-            if itemIcon then
-                icon:SetTexture(itemIcon)
-            else
-                icon:SetTexture("Interface\\Icons\\INV_Misc_Food_01")
-            end
-
-            -- Food name with quality color
-            local nameText = foodFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            nameText:SetPoint("LEFT", icon, "RIGHT", 5, 0)
-            nameText:SetText(food.name)
-
-            -- Set quality color
-            local qualityColors = {
-                [0] = {0.6, 0.6, 0.6},  -- Poor (gray)
-                [1] = {1, 1, 1},        -- Common (white)
-                [2] = {0.12, 1, 0},     -- Uncommon (green)
-                [3] = {0, 0.44, 0.87},  -- Rare (blue)
-                [4] = {0.64, 0.21, 0.93}, -- Epic (purple)
-                [5] = {1, 0.5, 0}       -- Legendary (orange)
-            }
-            local color = qualityColors[food.quality] or qualityColors[1]
-            nameText:SetTextColor(color[1], color[2], color[3])
-
-            -- Food count
-            local countText = foodFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            countText:SetPoint("RIGHT", -5, 0)
-            countText:SetText("x" .. food.count)
-            countText:SetTextColor(0.8, 0.8, 0.8)
-
-            -- Right-click to add to preferred foods
-            foodFrame:RegisterForClicks("RightButtonUp")
-            foodFrame:SetScript("OnClick", function()
-                self:AddFoodToProfile(food.name)
-            end)
-
-            -- Tooltip
-            foodFrame:SetScript("OnEnter", function()
-                GameTooltip:SetOwner(foodFrame, "ANCHOR_RIGHT")
-                if food.link then
-                    GameTooltip:SetHyperlink(food.link)
-                else
-                    GameTooltip:SetItemByID(food.name)
-                end
-                GameTooltip:AddLine("Right-click to add to preferred foods", 0.7, 0.7, 1)
-                GameTooltip:Show()
-            end)
-
-            foodFrame:SetScript("OnLeave", function()
-                GameTooltip:Hide()
-            end)
-
-            yOffset = yOffset - buttonHeight - 2
-        end
-    end
-
-    -- Update scroll child height
-    local totalHeight = math.abs(yOffset) + 20
-    self.foodListContent:SetHeight(math.max(totalHeight, 300))
-
-    -- Debug output
-    if self.Fizzure and self.Fizzure.debug.enabled then
-        self.Fizzure:LogDebug("DEBUG", "Updated profile frame with " .. #self.availableFoods .. " foods", "Hunter")
-    end
-end
-
-function HunterModule:AddFoodToProfile(foodName)
-    if not self.currentPet then return end
-
-    local profile = self.settings.petProfiles[self.currentPet.name]
-    if not profile then return end
-
-    if not profile.preferredFoods then
-        profile.preferredFoods = {}
-    end
-
-    -- Check if food is already in the list
-    for i = 1, 6 do
-        if profile.preferredFoods[i] == foodName then
-            self.Fizzure:ShowNotification("Already Added", foodName .. " is already in preferred foods", "info", 2)
-            return
-        end
-    end
-
-    -- Find first empty slot
-    for i = 1, 6 do
-        if not profile.preferredFoods[i] or profile.preferredFoods[i] == "" then
-            profile.preferredFoods[i] = foodName
-            self.Fizzure:SetModuleSettings(self.name, self.settings)
-
-            -- Update the slot display immediately
-            self.foodSlots[i]:SetItem(foodName)
-
-            -- Update status window
-            self:UpdateStatusFrame()
-
-            self.Fizzure:ShowNotification("Food Added", foodName .. " added to preferred foods", "success", 2)
-            return
-        end
-    end
-
-    self.Fizzure:ShowNotification("Slots Full", "All preferred food slots are full", "warning", 2)
-end
-
-function HunterModule:ClearFoodSlot(index)
-    if not self.currentPet then return end
-
-    local profile = self.settings.petProfiles[self.currentPet.name]
-    if profile and profile.preferredFoods then
-        local removedFood = profile.preferredFoods[index]
-        profile.preferredFoods[index] = nil
-        self.Fizzure:SetModuleSettings(self.name, self.settings)
-
-        -- Update the slot display immediately
-        self.foodSlots[index]:ClearItem()
-
-        -- Update status window
-        self:UpdateStatusFrame()
-
-        if removedFood then
-            self.Fizzure:ShowNotification("Food Removed", removedFood .. " removed from preferred foods", "info", 2)
-        end
-    end
-end
-
+-- Food slot management
 function HunterModule:HandleFoodDrop(index)
     local cursorType, itemID, itemLink = GetCursorInfo()
     if cursorType == "item" and itemLink then
         local itemName = GetItemInfo(itemLink)
-        if itemName then
-            if self.currentPet then
-                local profile = self.settings.petProfiles[self.currentPet.name]
-                if profile then
-                    if not profile.preferredFoods then
-                        profile.preferredFoods = {}
-                    end
-                    profile.preferredFoods[index] = itemName
-                    self.Fizzure:SetModuleSettings(self.name, self.settings)
-
-                    -- Update the slot display immediately with proper icon
-                    self.foodSlots[index]:SetItem(itemName, itemLink)
-
-                    -- Update status window
-                    self:UpdateStatusFrame()
-
-                    self.Fizzure:ShowNotification("Food Added", itemName .. " added to slot " .. index, "success", 2)
+        if itemName and self.currentPet then
+            local profile = self.settings.petProfiles[self.currentPet.name]
+            if profile then
+                if not profile.preferredFoods then
+                    profile.preferredFoods = {}
                 end
+                profile.preferredFoods[index] = itemName
+                self.Fizzure:SetModuleSettings(self.name, self.settings)
+                
+                self.foodSlots[index]:SetItem(itemName, itemLink)
+                self.ui.ShowNotification("Food Added", itemName .. " added to slot " .. index, "success", 2)
             end
             ClearCursor()
         end
     end
 end
 
+function HunterModule:ClearFoodSlot(index)
+    if not self.currentPet then return end
+    
+    local profile = self.settings.petProfiles[self.currentPet.name]
+    if profile and profile.preferredFoods then
+        local removedFood = profile.preferredFoods[index]
+        profile.preferredFoods[index] = nil
+        self.Fizzure:SetModuleSettings(self.name, self.settings)
+        
+        self.foodSlots[index]:ClearItem()
+        
+        if removedFood then
+            self.ui.ShowNotification("Food Removed", removedFood .. " removed", "info", 2)
+        end
+    end
+end
+
 function HunterModule:ClearAllFoodSlots()
     if not self.currentPet then return end
-
+    
     local profile = self.settings.petProfiles[self.currentPet.name]
     if profile then
         profile.preferredFoods = {}
         self.Fizzure:SetModuleSettings(self.name, self.settings)
-
+        
         for i = 1, 6 do
             self.foodSlots[i]:ClearItem()
         end
-
-        self:UpdateStatusFrame()
-        self.Fizzure:ShowNotification("Cleared", "All preferred foods cleared", "info", 2)
+        
+        self.ui.ShowNotification("Cleared", "All preferred foods cleared", "info", 2)
     end
 end
 
 function HunterModule:ToggleProfileFrame()
-    if not self.profileFrame then
-        self:CreatePetProfileFrame()
-    end
+    if not self.profileFrame then return end
+    
     if self.profileFrame:IsShown() then
-        if not self.profileFrame then self:CreatePetProfileFrame() end
         self.profileFrame:Hide()
     else
-        self:UpdatePetProfileFrame()   -- if your code expects a refresh
-        if not self.profileFrame then self:CreatePetProfileFrame() end
+        self:UpdateProfileFrame()
         self.profileFrame:Show()
     end
 end
 
-function HunterModule:CreateConfigUI(parent, x, y)
-    -- Ensure settings are available
-    self:EnsureSettings()
-
-    local showStatusCheck = FizzureUI:CreateCheckBox(parent, "Show status window",
-            self.settings.showFoodStatus, function(checked)
-                self.settings.showFoodStatus = checked
-                self.Fizzure:SetModuleSettings(self.name, self.settings)
-
-                if checked then
-                    if not self.statusFrame then self:CreateStatusFrame() end
-                    self.statusFrame:Show()
-                else
-                    if not self.statusFrame then self:CreateStatusFrame() end
-                    self.statusFrame:Hide()
-                end
-            end)
-    showStatusCheck:SetPoint("TOPLEFT", x, y)
-
-    local thresholdLabel = FizzureUI:CreateLabel(parent, "Low food threshold:")
-    thresholdLabel:SetPoint("TOPLEFT", x, y - 30)
-
-    local thresholdInput = FizzureUI:CreateEditBox(parent, 60, 20, function(text)
-        local value = tonumber(text)
-        if value and value >= 0 and value <= 100 then
-            self.settings.lowFoodThreshold = value
-            self.Fizzure:SetModuleSettings(self.name, self.settings)
+function HunterModule:UpdateProfileFrame()
+    if not self.profileFrame or not self.currentPet then return end
+    
+    -- Update pet name
+    self.profilePetLabel:SetText(self.currentPet.name .. " (" .. self.currentPet.family .. ")")
+    
+    -- Update food slots
+    local profile = self.settings.petProfiles[self.currentPet.name]
+    if profile and profile.preferredFoods then
+        for i = 1, 6 do
+            local foodName = profile.preferredFoods[i]
+            if foodName then
+                self.foodSlots[i]:SetItem(foodName)
+            else
+                self.foodSlots[i]:ClearItem()
+            end
         end
-    end)
-    thresholdInput:SetPoint("LEFT", thresholdLabel, "RIGHT", 10, 0)
-    thresholdInput:SetText(tostring(self.settings.lowFoodThreshold))
+    end
+end
 
-    local keybindLabel = FizzureUI:CreateLabel(parent, "Feed pet key:")
-    keybindLabel:SetPoint("TOPLEFT", x, y - 60)
+-- Keybinding management
+function HunterModule:RegisterKeybindings()
+    if not _G.FizzureSecure then return end
+    
+    -- Feed pet binding
+    FizzureSecure:CreateSecureButton(
+        "HunterFeedPetButton",
+        "/script " .. self.name .. ":FeedPet()",
+        self.settings.keybindings.feedPet,
+        "Feed Pet"
+    )
+    
+    -- Toggle status binding
+    FizzureSecure:CreateSecureButton(
+        "HunterToggleStatusButton", 
+        "/script " .. self.name .. ":ToggleStatusFrame()",
+        self.settings.keybindings.toggleStatus,
+        "Toggle Pet Status"
+    )
+    
+    -- Toggle profile binding
+    FizzureSecure:CreateSecureButton(
+        "HunterToggleProfileButton",
+        "/script " .. self.name .. ":ToggleProfileFrame()",
+        self.settings.keybindings.toggleProfile,
+        "Toggle Pet Profile"
+    )
+end
 
-    local keybindInput = FizzureUI:CreateEditBox(parent, 100, 20, function(text)
-        self.settings.keybindings.feedPet = text
-        self.Fizzure:SetModuleSettings(self.name, self.settings)
-        self:UpdateStatusFrame()
-    end)
-    keybindInput:SetPoint("LEFT", keybindLabel, "RIGHT", 10, 0)
-    keybindInput:SetText(self.settings.keybindings.feedPet or "")
+function HunterModule:UnregisterKeybindings()
+    if not _G.FizzureSecure then return end
+    
+    if self.settings.keybindings.feedPet then
+        FizzureSecure:ClearKeyBinding(self.settings.keybindings.feedPet)
+    end
+    
+    if self.settings.keybindings.toggleStatus then
+        FizzureSecure:ClearKeyBinding(self.settings.keybindings.toggleStatus)
+    end
+    
+    if self.settings.keybindings.toggleProfile then
+        FizzureSecure:ClearKeyBinding(self.settings.keybindings.toggleProfile)
+    end
+end
 
-    local profileBtn = FizzureUI:CreateButton(parent, "Pet Profiles", 100, 24, function()
-        self:ToggleProfileFrame()
-    end)
-    profileBtn:SetPoint("TOPLEFT", x, y - 90)
+function HunterModule:ToggleStatusFrame()
+    if not self.statusFrame then return end
+    
+    if self.statusFrame:IsShown() then
+        self.statusFrame:Hide()
+        self.settings.showStatusFrame = false
+    else
+        self.statusFrame:Show()
+        self.settings.showStatusFrame = true
+    end
+    
+    self.Fizzure:SetModuleSettings(self.name, self.settings)
+end
 
-    return y - 120
+-- Utility methods
+function HunterModule:Log(level, message)
+    if self.Fizzure and self.Fizzure.Log then
+        self.Fizzure:Log(level, "[Hunter] " .. message)
+    end
 end
 
 function HunterModule:GetQuickStatus()
     if not self.currentPet then
-        return "No pet active"
+        return "No Pet"
     end
-
+    
     local happiness = GetPetHappiness()
-    local happinessText = {"Unhappy", "Content", "Happy"}
-
+    local happinessText = happiness and ({"Unhappy", "Content", "Happy"})[happiness] or "Unknown"
+    
+    local totalFood = 0
     local profile = self.settings.petProfiles[self.currentPet.name]
-    local foodCount = 0
-
     if profile and profile.preferredFoods then
         for i = 1, 6 do
             local foodName = profile.preferredFoods[i]
-            if foodName and foodName ~= "" then
-                foodCount = foodCount + FizzureCommon:GetItemCount(foodName)
+            if foodName then
+                totalFood = totalFood + (self.availableFoods[foodName] or 0)
             end
         end
     end
-
-    return string.format("%s: %s, Food: %d",
-            self.currentPet.name,
-            happinessText[happiness] or "Unknown",
-            foodCount)
+    
+    return string.format("%s: %s, Food: %d", self.currentPet.name, happinessText, totalFood)
 end
 
--- Register module
+-- Register module with framework
 if Fizzure then
-    Fizzure:RegisterModule("Hunter Pet Manager", HunterModule)
+    Fizzure:RegisterModule(HunterModule)
+else
+    -- Queue for registration if framework not ready
+    if not _G.FizzureModuleQueue then
+        _G.FizzureModuleQueue = {}
+    end
+    table.insert(_G.FizzureModuleQueue, HunterModule)
 end

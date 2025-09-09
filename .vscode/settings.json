@@ -12,29 +12,39 @@
         "utf8": "disable"
     },
     "Lua.workspace.library": [
-        "~/.vscode/extensions/ketho.wow-api-0.21.0/Annotations/Core",
-        "${workspaceFolder}/.wow-3.3.5-stubs"
+        "${workspaceFolder}/stubs",
+        "${workspaceFolder}/libs/FrameXML",
+        "${workspaceFolder}/libs/GlueXML"
     ],
     // Don't auto-import third-party defs the server detects
     "Lua.workspace.checkThirdParty": false,
-    "Lua.diagnostics.globals": [
-        "ReloadUI",
-        "SlashCmdList",
-        "UIDropDownMenu_SetWidth",
-        "UIDropDownMenu_Initialize",
-        "UIDropDownMenu_AddButton",
-        "UIDropDownMenu_CreateInfo",
-        "UIDropDownMenu_SetSelectedValue",
-        "CharacterFrame",
-        "CR_CRIT_MELEE",
-        "CR_HIT_MELEE",
-        "CR_HASTE_MELEE",
-        "MouseIsOver",
-        "WorldFrame",
-        "ChatFrame1EditBox",
-        "StaticPopupDialogs",
-        "StaticPopup_Show"
-    ],
+    // "Lua.diagnostics.globals": [
+    //     "ReloadUI",
+    //     "SlashCmdList",
+    //     "UIDropDownMenu_SetWidth",
+    //     "UIDropDownMenu_Initialize",
+    //     "UIDropDownMenu_AddButton",
+    //     "UIDropDownMenu_CreateInfo",
+    //     "UIDropDownMenu_SetSelectedValue",
+    //     "CharacterFrame",
+    //     "CR_CRIT_MELEE",
+    //     "CR_HIT_MELEE",
+    //     "CR_HASTE_MELEE",
+    //     "MouseIsOver",
+    //     "WorldFrame",
+    //     "ChatFrame1EditBox",
+    //     "StaticPopupDialogs",
+    //     "StaticPopup_Show",
+    //     "TOOLTIP_UPDATE_TIME",
+    //     "MoneyFrame_Update",
+    //     "CONTAINER_OFFSET_Y",
+    //     "MoneyFrame_SetType",
+    //     "CONTAINER_OFFSET_X",
+    //     "SELL_PRICE",
+    //     "MINIMUM",
+    //     "MAXIMUM",
+    //     "FACTION_BAR_COLORS"
+    // ],
     "Lua.workspace.ignoreDir": [
         ".git",
         "Interface",
@@ -42,5 +52,6 @@
         "Cache"
     ],
     "Lua.completion.callSnippet": "Both",
-    "Lua.hint.enable": true
+    "Lua.hint.enable": true,
+    "Lua.type.weakUnionCheck": true
 }
